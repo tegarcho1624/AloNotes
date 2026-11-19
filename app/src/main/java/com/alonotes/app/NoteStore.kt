@@ -67,8 +67,24 @@ internal object NoteStore {
         }
     }
 
-    /** Carpetas primero; luego lo más reciente arriba. */
-    fun children(c: Context, parent: String): List<Item> =
+    /** Carpetas primero (sin las archivadas), luego notas; orden manual guardado y lo nuevo al final. */
+    fun children(c: Context, parent: String): List<Item> {
+        val all = load(c).filter { it.parent == parent }
+        val arch = ArchiveStore.ids(c)
+        val saved = OrderStore.get(c, parent)
+        val folders = all.filter { it.folder && !arch.contains(it.id) }.sortedByDescending { it.t }
+        val docs = all.filter { !it.folder }.sortedByDescending { it.t }
+        return OrderStore.applyOrder(folders, saved) { it.id } + OrderStore.applyOrder(docs, saved) { it.id }
+    }
+
+    /** Carpetas archivadas (de cualquier nivel). */
+    fun archivedFolders(c: Context): List<Item> {
+        val arch = ArchiveStore.ids(c)
+        return load(c).filter { it.folder && arch.contains(it.id) }.sortedBy { it.name.lowercase() }
+    }
+
+    /** Contenido de una carpeta sin filtrar archivadas (para Archivados). */
+    fun contentsOf(c: Context, parent: String): List<Item> =
         load(c).filter { it.parent == parent }.sortedWith(Comparator { x, y ->
             if (x.folder != y.folder) (if (x.folder) -1 else 1) else y.t.compareTo(x.t)
         })
@@ -114,6 +130,10 @@ internal object NoteStore {
         while (grew) {
             grew = false
             for (it in all) if (gone.contains(it.parent) && gone.add(it.id)) grew = true
+        }
+        for (g in gone) {
+            FolderIconStore.remove(c, g)
+            ArchiveStore.set(c, g, false)
         }
         save(c, all.filter { !gone.contains(it.id) })
     }

@@ -3,16 +3,19 @@ package com.alonotes.app
 import android.app.Activity
 import android.content.Intent
 import android.content.res.Configuration
+import android.graphics.Outline
 import android.os.Bundle
 import android.text.TextUtils
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -20,9 +23,14 @@ import java.util.Locale
 
 /**
  * Biblioteca "Mis notas": carpetas y notas en cuadrícula, menú flotante (+) y ajustes.
- * Botones sin función todavía => aviso "Próximamente".
+ * Toque largo + arrastre reordena (carpetas con carpetas, notas con notas); toque largo
+ * sin mover sobre una carpeta abre su menú (icono, archivar). Fondo propio (BgScope.LIBRARY).
  */
 class MainActivity : Activity() {
+    private companion object {
+        const val REQ_ICON = 21
+    }
+
     private var folderId = ""
     private val items = ArrayList<NoteStore.Item>()
     private lateinit var rv: RecyclerView
@@ -32,10 +40,17 @@ class MainActivity : Activity() {
     private lateinit var scrim: View
     private lateinit var fabMenu: View
     private lateinit var fab: View
+    private lateinit var bgLayer: BackgroundLayer
+    private lateinit var touch: ItemTouchHelper
     private var themeVer = 0
+    private var pendingIconFolder: String? = null
+    private var dragging = false
+    private var moved = false
+    private var dragged: NoteStore.Item? = null
     private val fmt = SimpleDateFormat("EEE dd MMM, HH:mm", Locale("es"))
 
     private fun dp(v: Number) = UiKit.dp(this, v)
+    private fun off() = if (folderId.isEmpty()) 0 else 1
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -43,9 +58,11 @@ class MainActivity : Activity() {
         themeVer = ThemeUtils.version()
         if (b != null) folderId = b.getString("folder") ?: ""
         val ink = getColor(R.color.ink)
+        val hi = ThemeUtils.accentHi(this)
 
         val root = FrameLayout(this)
-        root.setBackgroundColor(getColor(R.color.bg))
+        bgLayer = BackgroundLayer(this, BgScope.LIBRARY)
+        root.addView(bgLayer, FrameLayout.LayoutParams(-1, -1))
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
         root.addView(col, FrameLayout.LayoutParams(-1, -1))
@@ -55,15 +72,18 @@ class MainActivity : Activity() {
         bar.gravity = Gravity.CENTER_VERTICAL
         bar.setBackgroundColor(getColor(R.color.sf))
         bar.setPadding(dp(8), 0, dp(8), 0)
-        bar.addView(UiKit.iconBtn(this, Icons.MENU, ink, 48, 24) { UiKit.soon(this) }, UiKit.box(this, 48))
+        bar.addView(UiKit.iconBtn(this, Icons.MENU, hi, 48, 24) { UiKit.soon(this) }, UiKit.box(this, 48))
         crumb = LinearLayout(this)
         crumb.gravity = Gravity.CENTER_VERTICAL
         crumb.setPadding(dp(8), 0, 0, 0)
         bar.addView(crumb, LinearLayout.LayoutParams(0, -2, 1f))
-        for (t in intArrayOf(Icons.SORT, Icons.SEARCH, Icons.MAIL, Icons.HELP)) {
-            bar.addView(UiKit.iconBtn(this, t, ink, 48, 24) { UiKit.soon(this) }, UiKit.box(this, 48))
+        for (t in intArrayOf(Icons.SORT, Icons.SEARCH)) {
+            bar.addView(UiKit.iconBtn(this, t, hi, 48, 24) { UiKit.soon(this) }, UiKit.box(this, 48))
         }
-        bar.addView(UiKit.iconBtn(this, Icons.GEAR, ink, 48, 24) { openSettings() }, UiKit.box(this, 48))
+        bar.addView(
+            UiKit.iconBtn(this, Icons.GEAR, hi, 48, 24) { startActivity(Intent(this, SettingsActivity::class.java)) },
+            UiKit.box(this, 48)
+        )
         col.addView(bar, LinearLayout.LayoutParams(-1, dp(56)))
         val line = View(this)
         line.setBackgroundColor(getColor(R.color.ln))
@@ -81,6 +101,8 @@ class MainActivity : Activity() {
         rv.layoutManager = glm
         adapter = Adapter()
         rv.adapter = adapter
+        touch = ItemTouchHelper(dragCallback)
+        touch.attachToRecyclerView(rv)
         col.addView(rv, LinearLayout.LayoutParams(-1, 0, 1f))
 
         // Menú flotante (+)
@@ -131,7 +153,13 @@ class MainActivity : Activity() {
             recreate()
             return
         }
+        bgLayer.refresh()
         refresh()
+    }
+
+    override fun onPause() {
+        bgLayer.pause()
+        super.onPause()
     }
 
     @Suppress("OVERRIDE_DEPRECATION")
@@ -139,6 +167,17 @@ class MainActivity : Activity() {
         if (fabMenu.visibility == View.VISIBLE) toggleMenu(false)
         else if (folderId.isNotEmpty()) goUp()
         else super.onBackPressed()
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        val uri = data?.data
+        val id = pendingIconFolder
+        if (req == REQ_ICON && res == RESULT_OK && uri != null && id != null) {
+            FolderMenu.applyIcon(this, id, uri) { refresh() }
+        }
+        pendingIconFolder = null
     }
 
     // ---------- Datos ----------
@@ -179,6 +218,78 @@ class MainActivity : Activity() {
             n.ellipsize = TextUtils.TruncateAt.END
             crumb.addView(n)
         }
+    }
+
+    // ---------- Arrastrar y soltar ----------
+
+    private fun itemAt(vh: RecyclerView.ViewHolder): NoteStore.Item? =
+        items.getOrNull(vh.bindingAdapterPosition - off())
+
+    private val dragCallback = object : ItemTouchHelper.Callback() {
+        override fun isLongPressDragEnabled(): Boolean = false
+        override fun isItemViewSwipeEnabled(): Boolean = false
+
+        override fun getMovementFlags(rv: RecyclerView, vh: RecyclerView.ViewHolder): Int =
+            if (vh.itemViewType == 0) 0
+            else makeMovementFlags(
+                ItemTouchHelper.UP or ItemTouchHelper.DOWN or ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT, 0
+            )
+
+        override fun canDropOver(
+            rv: RecyclerView, current: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder
+        ): Boolean {
+            val a = itemAt(current)
+            val b = itemAt(target)
+            return a != null && b != null && a.folder == b.folder
+        }
+
+        override fun onMove(
+            rv: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder
+        ): Boolean {
+            val from = vh.bindingAdapterPosition - off()
+            val to = target.bindingAdapterPosition - off()
+            if (from < 0 || to < 0 || from >= items.size || to >= items.size) return false
+            items.add(to, items.removeAt(from))
+            adapter.notifyItemMoved(vh.bindingAdapterPosition, target.bindingAdapterPosition)
+            moved = true
+            return true
+        }
+
+        override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {}
+
+        override fun onSelectedChanged(vh: RecyclerView.ViewHolder?, state: Int) {
+            super.onSelectedChanged(vh, state)
+            if (state == ItemTouchHelper.ACTION_STATE_DRAG) {
+                vh?.itemView?.alpha = 0.85f
+                vh?.itemView?.scaleX = 1.05f
+                vh?.itemView?.scaleY = 1.05f
+            }
+        }
+
+        override fun clearView(rv: RecyclerView, vh: RecyclerView.ViewHolder) {
+            super.clearView(rv, vh)
+            vh.itemView.alpha = 1f
+            vh.itemView.scaleX = 1f
+            vh.itemView.scaleY = 1f
+            if (!dragging) return
+            dragging = false
+            val d = dragged
+            dragged = null
+            if (moved) {
+                OrderStore.set(this@MainActivity, folderId, items.map { it.id })
+            } else if (d != null && d.folder) {
+                FolderMenu.show(this@MainActivity, d, { pickIcon(d.id) }) { refresh() }
+            }
+        }
+    }
+
+    private fun pickIcon(id: String) {
+        pendingIconFolder = id
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "image/*"
+        @Suppress("DEPRECATION")
+        startActivityForResult(i, REQ_ICON)
     }
 
     // ---------- Menú flotante ----------
@@ -263,44 +374,6 @@ class MainActivity : Activity() {
         ref.d = UiKit.show(this, l, true)
     }
 
-    // ---------- Ajustes ----------
-
-    private fun openSettings() {
-        val ink = getColor(R.color.ink)
-        val l = UiKit.vbox(this, 12)
-        val title = UiKit.text(this, "Ajustes", 18, ink)
-        title.setPadding(dp(14), dp(8), dp(14), dp(8))
-        l.addView(title)
-        val sec = UiKit.text(this, "Color de acento", 13, getColor(R.color.mut))
-        sec.setPadding(dp(14), dp(6), dp(14), dp(6))
-        l.addView(sec)
-        val ref = DlgRef()
-        val cur = ThemeUtils.accent(this)
-        var rowL: LinearLayout? = null
-        for ((i, color) in ThemeUtils.ACCENT_COLORS.withIndex()) {
-            if (i % 6 == 0) {
-                val nr = LinearLayout(this)
-                nr.setPadding(dp(8), 0, 0, 0)
-                l.addView(nr)
-                rowL = nr
-            }
-            val sw = View(this)
-            sw.background = UiKit.oval(this, color, ink, if (color == cur) 2.5f else 0f)
-            sw.setOnClickListener {
-                ref.dismiss()
-                ThemeUtils.setAccent(this, color)
-                recreate()
-            }
-            val sp = UiKit.box(this, 40)
-            sp.setMargins(dp(6), dp(6), dp(6), dp(6))
-            rowL!!.addView(sw, sp)
-        }
-        l.addView(UiKit.sheetRow(this, Icons.TEXT, "Fuentes", ink, ref) { UiKit.soon(this) })
-        l.addView(UiKit.sheetRow(this, Icons.DOC, "Copia de seguridad", ink, ref) { UiKit.soon(this) })
-        l.addView(UiKit.sheetRow(this, Icons.HELP, "Acerca de AloNotes", ink, ref) { UiKit.soon(this) })
-        ref.d = UiKit.show(this, l, true)
-    }
-
     // ---------- Adaptador ----------
 
     private class Views {
@@ -311,7 +384,7 @@ class MainActivity : Activity() {
     }
 
     private inner class Adapter : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
-        override fun getItemCount(): Int = items.size + (if (folderId.isEmpty()) 0 else 1)
+        override fun getItemCount(): Int = items.size + off()
 
         override fun getItemViewType(position: Int): Int =
             if (folderId.isNotEmpty() && position == 0) 0 else 1
@@ -323,12 +396,25 @@ class MainActivity : Activity() {
 
         override fun onBindViewHolder(h: RecyclerView.ViewHolder, position: Int) {
             if (getItemViewType(position) == 0) return
-            val it = items[position - (if (folderId.isEmpty()) 0 else 1)]
+            val it = items[position - off()]
             val v = h.itemView.tag as Views
             v.name.text = it.name
             v.date.text = fmt.format(Date(it.t))
             v.thumb.removeAllViews()
-            if (it.folder) {
+            val iconPath = if (it.folder) FolderIconStore.get(this@MainActivity, it.id) else null
+            if (it.folder && iconPath != null) {
+                // Con ícono propio se dibuja solo la imagen (FillBounds, esquinas redondeadas).
+                val iv = ImageView(this@MainActivity)
+                iv.scaleType = ImageView.ScaleType.FIT_XY
+                iv.setImageBitmap(ImageUtil.decodeFile(iconPath, 512))
+                iv.clipToOutline = true
+                iv.outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, o: Outline) {
+                        o.setRoundRect(0, 0, view.width, view.height, dp(12).toFloat())
+                    }
+                }
+                v.thumb.addView(iv, FrameLayout.LayoutParams(dp(150), dp(100), Gravity.CENTER))
+            } else if (it.folder) {
                 val iv = ImageView(this@MainActivity)
                 iv.setImageDrawable(Icons(Icons.FOLDER, ThemeUtils.accent(this@MainActivity), true))
                 v.thumb.addView(iv, FrameLayout.LayoutParams(dp(84), dp(84), Gravity.CENTER))
@@ -358,6 +444,13 @@ class MainActivity : Activity() {
                     i.putExtra("id", it.id)
                     startActivity(i)
                 }
+            }
+            h.itemView.setOnLongClickListener { _ ->
+                moved = false
+                dragging = true
+                dragged = it
+                touch.startDrag(h)
+                true
             }
             v.more.setOnClickListener { _ -> options(it) }
         }

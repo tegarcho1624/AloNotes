@@ -39,6 +39,8 @@ class EditorActivity : Activity() {
     private lateinit var sv: ScrollView
     private lateinit var counter: TextView
     private var total = 0
+    private var themeVer = 0
+    private lateinit var bgLayer: BackgroundLayer
 
     private fun dp(v: Number) = UiKit.dp(this, v)
 
@@ -51,12 +53,16 @@ class EditorActivity : Activity() {
             return
         }
         docId = id
-        val ink = getColor(R.color.ink)
+        themeVer = ThemeUtils.version()
+        val ink = ThemeUtils.accentHi(this)
         val mut = getColor(R.color.mut)
 
+        val root = FrameLayout(this)
+        bgLayer = BackgroundLayer(this, BgScope.EDITOR)
+        root.addView(bgLayer, FrameLayout.LayoutParams(-1, -1))
         val col = LinearLayout(this)
         col.orientation = LinearLayout.VERTICAL
-        col.setBackgroundColor(getColor(R.color.bg))
+        root.addView(col, FrameLayout.LayoutParams(-1, -1))
 
         // Barra de herramientas
         val bar = LinearLayout(this)
@@ -73,7 +79,7 @@ class EditorActivity : Activity() {
         for (t in tools) bar.addView(tb(t, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         bar.addView(tb(Icons.UNDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
-        counter = UiKit.text(this, "0 / 0", 17, ink)
+        counter = UiKit.text(this, "0 / 0", 17, getColor(R.color.ink))
         counter.gravity = Gravity.CENTER
         bar.addView(counter, LinearLayout.LayoutParams(dp(90), -2))
         bar.addView(tb(Icons.REDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
@@ -99,7 +105,6 @@ class EditorActivity : Activity() {
 
         // Lienzo de páginas
         sv = ScrollView(this)
-        sv.setBackgroundColor(getColor(R.color.sf2))
         pagesCol = LinearLayout(this)
         pagesCol.orientation = LinearLayout.VERTICAL
         pagesCol.gravity = Gravity.CENTER_HORIZONTAL
@@ -108,9 +113,23 @@ class EditorActivity : Activity() {
         sv.setOnScrollChangeListener { _, _, _, _, _ -> updateCounter() }
         col.addView(sv, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        setContentView(col)
+        setContentView(root)
         renderPages()
         if (b == null && intent.getBooleanExtra("new", false) && total == 0) createPages()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (themeVer != ThemeUtils.version()) {
+            recreate()
+            return
+        }
+        bgLayer.refresh()
+    }
+
+    override fun onPause() {
+        if (::bgLayer.isInitialized) bgLayer.pause()
+        super.onPause()
     }
 
     private fun tb(type: Int, color: Int, l: () -> Unit): View =
@@ -240,6 +259,7 @@ class EditorActivity : Activity() {
         num.gravity = Gravity.END
         num.setSingleLine(true)
         num.setTextColor(getColor(R.color.ink))
+        num.typeface = FontManager.current(this)
         num.backgroundTintList = ColorStateList.valueOf(ThemeUtils.accent(this))
         l.addView(formRow("Número de páginas", num, dp(90)))
         val ref = DlgRef()

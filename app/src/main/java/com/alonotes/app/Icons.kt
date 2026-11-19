@@ -42,6 +42,10 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val ROT_L = 25
         const val ROT_R = 26
         const val PENCIL = 27
+        const val CHECK = 28
+        const val ARCHIVE = 29
+        const val PALETTE = 30
+        const val VIDEO = 31
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -201,6 +205,17 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
             }
             ROT_L -> rot(c)
             ROT_R -> { c.save(); c.scale(-1f, 1f, 12f, 12f); rot(c); c.restore() }
+            CHECK -> poly(c, false, 5, 12.5f, 10, 17.5f, 19, 7)
+            ARCHIVE -> {
+                rr(c, 3, 4, 21, 9, 1.5f)
+                poly(c, false, 5, 9, 5, 20, 19, 20, 19, 9)
+                ln(c, 10, 13, 14, 13)
+            }
+            PALETTE -> {
+                circ(c, 12, 12, 9)
+                circ(c, 8, 10.5f, 1); circ(c, 12, 7.5f, 1); circ(c, 16, 10.5f, 1); circ(c, 8.5f, 15.5f, 1)
+            }
+            VIDEO -> { rr(c, 3, 6, 15, 18, 2); poly(c, true, 15, 10, 21, 7, 21, 17, 15, 14) }
             else -> {}
         }
         c.restore()

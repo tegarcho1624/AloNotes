@@ -65,6 +65,7 @@ internal object UiKit {
         t.text = s
         t.textSize = sp.toFloat()
         t.setTextColor(color)
+        t.typeface = FontManager.current(c)
         return t
     }
 
@@ -145,7 +146,8 @@ internal object UiKit {
         row.gravity = Gravity.CENTER_VERTICAL
         row.setPadding(dp(a, 14), dp(a, 14), dp(a, 14), dp(a, 14))
         val iv = ImageView(a)
-        iv.setImageDrawable(Icons(icon, color, false))
+        val ic = if (color == a.getColor(R.color.danger)) color else ThemeUtils.accentHi(a)
+        iv.setImageDrawable(Icons(icon, ic, false))
         row.addView(iv, box(a, 22))
         val t = text(a, label, 16, color)
         val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -168,6 +170,7 @@ internal object UiKit {
         e.setText(initial)
         e.setSelection(initial.length)
         e.setTextColor(a.getColor(R.color.ink))
+        e.typeface = FontManager.current(a)
         e.backgroundTintList = ColorStateList.valueOf(ThemeUtils.accent(a))
         val ep = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         ep.topMargin = dp(a, 14)

@@ -19,6 +19,23 @@ No cambiar `applicationId`.
 - Eliminado el botón flotante de lápiz del editor (el lápiz del borde es el panel edge de la tablet).
 - versionCode 2 / versionName 0.1.1.
 
+## Fase 2 — Personalización estilo AloTube (v0.2.0)
+- Quitados los íconos de correo y ayuda de la biblioteca.
+- **Carpetas como AloTube:** toque largo + arrastre reordena (carpetas con carpetas, notas con notas;
+  `local_order`); toque largo sin mover abre el menú de la carpeta: Establecer icono (imagen del
+  dispositivo, `folder_icons`), Quitar fondo y Archivar/Desarchivar (`folder_archive`). Con ícono propio
+  la tarjeta muestra solo la imagen.
+- **Ajustes (tuerca):** Apariencia › Fondo / Estilos de letra / Color de acento; Archivados.
+  - Fondos por pantalla (Mis notas, Editor, Ajustes): imagen o **video** (mudo, en bucle), ajuste
+    Rellenar/Estirar/Ajustar, capa oscura al 60 % (`backgrounds`, `filesDir/backgrounds/`).
+  - Estilos de letra: `assets/fonts/` (pon ahí tus .ttf/.otf), importadas (`filesDir/fonts/`) y 5 del sistema.
+  - Acento: 12 colores + colores propios por **HEX** (máx. 12, `accent_custom`). El acento tiñe los íconos
+    de barras y hojas.
+- Cambiar acento o fuente recrea las pantallas abiertas.
+
+**No cambia:** `applicationId`, claves `notes`/`items` y `settings`/`accent`, formato de las notas,
+el ícono del launcher (color fijo).
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.
