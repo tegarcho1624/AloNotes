@@ -46,6 +46,10 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val ARCHIVE = 29
         const val PALETTE = 30
         const val VIDEO = 31
+        const val FOUNTAIN = 32
+        const val BRUSH = 33
+        const val SMOOTH = 34
+        const val EYEDROPPER = 35
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -216,6 +220,28 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
                 circ(c, 8, 10.5f, 1); circ(c, 12, 7.5f, 1); circ(c, 16, 10.5f, 1); circ(c, 8.5f, 15.5f, 1)
             }
             VIDEO -> { rr(c, 3, 6, 15, 18, 2); poly(c, true, 15, 10, 21, 7, 21, 17, 15, 14) }
+            FOUNTAIN -> {
+                poly(c, true, 4.5f, 19.5f, 6, 13, 14, 5, 19, 10, 11, 18)
+                ln(c, 4.5f, 19.5f, 10, 14); circ(c, 10.8f, 13.2f, 1.1f)
+            }
+            BRUSH -> {
+                ln(c, 19.5f, 4.5f, 11.5f, 12.5f)
+                q.reset()
+                q.moveTo(11f, 11f)
+                q.cubicTo(8.5f, 10.5f, 5.5f, 13f, 5.5f, 16f)
+                q.cubicTo(5.5f, 18f, 4.5f, 19f, 3.5f, 19.5f)
+                q.cubicTo(7f, 21f, 11.5f, 19.5f, 13f, 15.5f)
+                q.close()
+                c.drawPath(q, p)
+            }
+            SMOOTH -> {
+                q.reset()
+                q.moveTo(3f, 12f)
+                q.cubicTo(6f, 4f, 9f, 4f, 12f, 12f)
+                q.cubicTo(15f, 20f, 18f, 20f, 21f, 12f)
+                c.drawPath(q, p)
+            }
+            EYEDROPPER -> { poly(c, true, 4, 20, 5.5f, 15.5f, 14, 7, 17, 10, 8.5f, 18.5f); ln(c, 13, 5, 19, 11) }
             else -> {}
         }
         c.restore()

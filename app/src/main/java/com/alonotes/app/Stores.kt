@@ -137,3 +137,58 @@ internal object OrderStore {
         return known + rest
     }
 }
+
+/**
+ * Ajustes del lápiz. SharedPreferences "pen": type 0 lápiz | 1 pluma | 2 pincel, smoothing 0..100
+ * (10 por defecto), width 0 fino | 1 normal | 2 denso, color_idx 0..3, colors = 4 × "RRGGBB",
+ * saved = hasta 14 colores guardados. Valor corrupto => por defecto.
+ */
+internal object PenStore {
+    const val MAX_SAVED = 14
+    private val DEFAULT_COLORS = intArrayOf(
+        0xFF000000.toInt(), 0xFFFF0000.toInt(), 0xFFFF5CB8.toInt(), 0xFF6BFFF3.toInt()
+    )
+
+    private fun sp(c: Context) = c.getSharedPreferences("pen", Context.MODE_PRIVATE)
+
+    fun type(c: Context): Int = sp(c).getInt("type", 0).coerceIn(0, 2)
+    fun setType(c: Context, v: Int) = sp(c).edit().putInt("type", v).apply()
+
+    fun smoothing(c: Context): Int = sp(c).getInt("smoothing", 10).coerceIn(0, 100)
+    fun setSmoothing(c: Context, v: Int) = sp(c).edit().putInt("smoothing", v.coerceIn(0, 100)).apply()
+
+    fun width(c: Context): Int = sp(c).getInt("width", 1).coerceIn(0, 2)
+    fun setWidth(c: Context, v: Int) = sp(c).edit().putInt("width", v).apply()
+
+    fun colorIdx(c: Context): Int = sp(c).getInt("color_idx", 0).coerceIn(0, 3)
+    fun setColorIdx(c: Context, v: Int) = sp(c).edit().putInt("color_idx", v).apply()
+
+    private fun parse(raw: String?): List<Int> {
+        val out = ArrayList<Int>()
+        for (h in (raw ?: "").split(",")) {
+            if (h.isBlank()) continue
+            ThemeUtils.parseHex(h)?.let { out.add(it) }
+        }
+        return out
+    }
+
+    private fun csv(l: List<Int>) = l.joinToString(",") { String.format("%06X", it and 0x00FFFFFF) }
+
+    fun colors(c: Context): IntArray {
+        val l = try { parse(sp(c).getString("colors", "")) } catch (e: Exception) { emptyList() }
+        return if (l.size == 4) l.toIntArray() else DEFAULT_COLORS.copyOf()
+    }
+
+    fun setColor(c: Context, idx: Int, color: Int) {
+        val a = colors(c)
+        a[idx.coerceIn(0, 3)] = color or 0xFF000000.toInt()
+        sp(c).edit().putString("colors", csv(a.toList())).apply()
+    }
+
+    fun saved(c: Context): List<Int> =
+        try { parse(sp(c).getString("saved", "")).take(MAX_SAVED) } catch (e: Exception) { emptyList() }
+
+    fun setSaved(c: Context, l: List<Int>) {
+        sp(c).edit().putString("saved", csv(l.take(MAX_SAVED))).apply()
+    }
+}

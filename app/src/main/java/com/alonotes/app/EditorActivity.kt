@@ -38,6 +38,8 @@ class EditorActivity : Activity() {
     private lateinit var pagesCol: LinearLayout
     private lateinit var sv: ScrollView
     private lateinit var counter: TextView
+    private lateinit var bar: LinearLayout
+    private var penOn = false
     private var total = 0
     private var themeVer = 0
     private lateinit var bgLayer: BackgroundLayer
@@ -54,9 +56,6 @@ class EditorActivity : Activity() {
         }
         docId = id
         themeVer = ThemeUtils.version()
-        val ink = ThemeUtils.accentHi(this)
-        val mut = getColor(R.color.mut)
-
         val root = FrameLayout(this)
         bgLayer = BackgroundLayer(this, BgScope.EDITOR)
         root.addView(bgLayer, FrameLayout.LayoutParams(-1, -1))
@@ -64,35 +63,13 @@ class EditorActivity : Activity() {
         col.orientation = LinearLayout.VERTICAL
         root.addView(col, FrameLayout.LayoutParams(-1, -1))
 
-        // Barra de herramientas
-        val bar = LinearLayout(this)
+        // Barra de herramientas (se reconstruye al elegir el lápiz o cambiar sus opciones)
+        bar = LinearLayout(this)
         bar.gravity = Gravity.CENTER_VERTICAL
         bar.setPadding(dp(6), 0, dp(6), 0)
-        bar.addView(tb(Icons.BACK, ink) { finish() }, UiKit.box(this, 44))
-        bar.addView(tb(Icons.GRID, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
-        bar.addView(tb(Icons.PLUS, ink) { createPages() }, UiKit.box(this, 44))
-        bar.addView(View(this), LinearLayout.LayoutParams(dp(22), 1))
-        val tools = intArrayOf(
-            Icons.PEN, Icons.MARKER, Icons.ERASER, Icons.TEXT,
-            Icons.SHAPES, Icons.IMAGE, Icons.STAR, Icons.SELECT
-        )
-        for (t in tools) bar.addView(tb(t, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
-        bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        bar.addView(tb(Icons.UNDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
         counter = UiKit.text(this, "0 / 0", 17, getColor(R.color.ink))
         counter.gravity = Gravity.CENTER
-        bar.addView(counter, LinearLayout.LayoutParams(dp(90), -2))
-        bar.addView(tb(Icons.REDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
-        bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        bar.addView(tb(Icons.LOCK, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
-        bar.addView(tb(Icons.ROT_L, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
-        bar.addView(tb(Icons.ROT_R, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
-        val div = View(this)
-        div.setBackgroundColor(getColor(R.color.ln2))
-        val dv = LinearLayout.LayoutParams(dp(1), dp(24))
-        dv.setMargins(dp(8), 0, dp(8), 0)
-        bar.addView(div, dv)
-        bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+        buildBar()
         val hsv = HorizontalScrollView(this)
         hsv.isFillViewport = true
         hsv.isHorizontalScrollBarEnabled = false
@@ -130,6 +107,45 @@ class EditorActivity : Activity() {
     override fun onPause() {
         if (::bgLayer.isInitialized) bgLayer.pause()
         super.onPause()
+    }
+
+    private fun buildBar() {
+        val ink = ThemeUtils.accentHi(this)
+        val mut = getColor(R.color.mut)
+        bar.removeAllViews()
+        bar.addView(tb(Icons.BACK, ink) { finish() }, UiKit.box(this, 44))
+        bar.addView(tb(Icons.GRID, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+        bar.addView(tb(Icons.PLUS, ink) { createPages() }, UiKit.box(this, 44))
+        bar.addView(View(this), LinearLayout.LayoutParams(dp(22), 1))
+        // Lápiz: seleccionable; muestra sus opciones a la derecha de las herramientas
+        val penBtn = tb(PenOptions.typeIcon(PenStore.type(this)), ink) {
+            penOn = !penOn
+            buildBar()
+        }
+        if (penOn) UiKit.ripple(this, penBtn, 12, ThemeUtils.accentBg(this))
+        bar.addView(penBtn, UiKit.box(this, 44))
+        val others = intArrayOf(
+            Icons.MARKER, Icons.ERASER, Icons.TEXT, Icons.SHAPES, Icons.IMAGE, Icons.STAR, Icons.SELECT
+        )
+        for (t in others) bar.addView(tb(t, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+        bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        if (penOn) {
+            PenOptions.build(this, bar) { buildBar() }
+        } else {
+            bar.addView(tb(Icons.UNDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
+            bar.addView(counter, LinearLayout.LayoutParams(dp(90), -2))
+            bar.addView(tb(Icons.REDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
+        }
+        bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        bar.addView(tb(Icons.LOCK, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+        bar.addView(tb(Icons.ROT_L, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
+        bar.addView(tb(Icons.ROT_R, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
+        val div = View(this)
+        div.setBackgroundColor(getColor(R.color.ln2))
+        val dv = LinearLayout.LayoutParams(dp(1), dp(24))
+        dv.setMargins(dp(8), 0, dp(8), 0)
+        bar.addView(div, dv)
+        bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
     }
 
     private fun tb(type: Int, color: Int, l: () -> Unit): View =

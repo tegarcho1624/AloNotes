@@ -36,6 +36,15 @@ No cambiar `applicationId`.
 **No cambia:** `applicationId`, claves `notes`/`items` y `settings`/`accent`, formato de las notas,
 el ícono del launcher (color fijo).
 
+## Fase 3 — Opciones del lápiz (v0.2.1)
+- Al tocar el lápiz en el editor se resalta y aparecen sus opciones a la derecha de las herramientas:
+  tipo (lápiz / pluma / pincel, cambia también el ícono), suavizado (menú con valor y deslizador),
+  3 grosores y 4 colores. Toque largo en un color: selector con círculo cromático, barra de valor,
+  HEX (misma validación que el acento) y paleta de hasta 14 colores guardados.
+- Datos: SharedPreferences `pen`. Aún NO hay trazo sobre la hoja: eso es la siguiente fase.
+
+**No cambia:** datos de notas, carpetas, fondos, fuentes y acento.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.
