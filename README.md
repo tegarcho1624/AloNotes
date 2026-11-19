@@ -47,7 +47,7 @@ el ícono del launcher (color fijo).
 
 ## Fase 4 — Vistas del editor y menú lateral (v0.3.0)
 - **Ojo** en la barra del editor: alterna entre *una hoja* (centrada, ajustada a la pantalla según su
-  orientación; deslizar con un dedo cambia de hoja: izquierda = anterior, derecha = siguiente) y
+  orientación; deslizar con un dedo cambia de hoja: las hojas van de izquierda a derecha: a la izquierda = siguiente, a la derecha = anterior) y
   *continua* (todas las hojas en columna con un pequeño espacio; solo visual, sin herramientas).
 - Zoom con pellizco en ambas vistas (visual, no cambia la hoja): una hoja mínimo 25 % del ajuste;
   continua nunca más pequeña que su tamaño base. Dos dedos rotan la hoja en la vista de una hoja
@@ -57,6 +57,12 @@ el ícono del launcher (color fijo).
   Sin categorizar, Favoritos, Papelera, Categorías, Mis notas, Nueva categoría (todo "Próximamente").
 
 **No cambia:** datos de notas, carpetas, fondos, fuentes, acento y opciones del lápiz.
+
+### v0.3.1 — correcciones
+- Orden de hojas de izquierda a derecha (deslizar a la izquierda avanza a la siguiente).
+- Vista continua: ya se desplaza (la columna tenía la altura de la pantalla); hoja 1 arriba.
+- Al reabrir una nota las hojas aparecían vacías hasta pulsar el ojo: la vista se reconstruía en
+  mitad del layout y la hoja quedaba sin medir; ahora se reconstruye justo después.
 
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)

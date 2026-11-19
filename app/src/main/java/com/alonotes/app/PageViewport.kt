@@ -23,8 +23,8 @@ import kotlin.math.sin
 /**
  * Área de hojas del editor, con dos vistas (solo visuales: nada de esto se guarda en la hoja):
  *  - Una hoja (Single Page View / Fit to Screen): la hoja actual centrada y ajustada a la pantalla,
- *    con su orientación. Un dedo desliza para cambiar de hoja (izquierda = anterior, derecha =
- *    siguiente); pellizco = zoom (mínimo 25 % del ajuste, la hoja nunca desaparece); dos dedos =
+ *    con su orientación. Un dedo desliza para cambiar de hoja (las hojas van de izquierda a derecha:
+ *    a la izquierda = siguiente, a la derecha = anterior); pellizco = zoom (mínimo 25 % del ajuste, la hoja nunca desaparece); dos dedos =
  *    rotar; con zoom, un dedo mueve la hoja; doble toque = restablecer.
  *  - Continua (Continuous Scroll / Multi-page): todas las hojas en columna con un pequeño espacio;
  *    solo lectura. Pellizco = zoom (nunca más pequeño que el tamaño base), un dedo = desplazar.
@@ -118,7 +118,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
-        if (w > 0 && h > 0) rebuild()
+        if (w > 0 && h > 0) post { rebuild() }
     }
 
     private fun pageBg(color: Int): GradientDrawable {
@@ -147,16 +147,20 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             col.gravity = Gravity.CENTER_HORIZONTAL
             col.setPadding(0, dp(24), 0, dp(24))
             val base = min(width - dp(64), dp(720)).toFloat()
+            var totalH = dp(24) * 2
             for (sp in specs) {
                 val k = base / max(sp.wMm, sp.hMm)
                 val v = View(context)
                 v.background = pageBg(sp.bg)
                 v.elevation = 4 * d
-                val lp = LinearLayout.LayoutParams((sp.wMm * k).roundToInt(), (sp.hMm * k).roundToInt())
+                val ph = (sp.hMm * k).roundToInt()
+                val lp = LinearLayout.LayoutParams((sp.wMm * k).roundToInt(), ph)
                 lp.bottomMargin = dp(20)
                 col.addView(v, lp)
+                totalH += ph + dp(20)
             }
-            addView(col, LayoutParams(width, -2))
+            // Altura exacta (páginas de la 1 arriba a la última abajo) para poder desplazarse.
+            addView(col, LayoutParams(width, totalH))
             column = col
             col.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
                 override fun onLayoutChange(
@@ -319,7 +323,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         rebuild()
         single?.let {
             it.alpha = 0.4f
-            it.translationX = (if (forward) -0.2f else 0.2f) * width
+            it.translationX = (if (forward) 0.2f else -0.2f) * width
             it.animate().alpha(1f).translationX(0f).setDuration(160).start()
         }
         onPage?.invoke()
@@ -379,8 +383,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                         val dx = e.x - sx
                         val dy = e.y - sy
                         if (abs(dx) > max(dp(64), (width * 0.12f).toInt()) && abs(dx) > 2 * abs(dy)) {
-                            // Izquierda = anterior, derecha = siguiente.
-                            if (dx < 0) goTo(index - 1, false) else goTo(index + 1, true)
+                            // Las hojas van de izquierda a derecha: deslizar a la izquierda avanza.
+                            if (dx < 0) goTo(index + 1, true) else goTo(index - 1, false)
                         }
                     }
                 }
