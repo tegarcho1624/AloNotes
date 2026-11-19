@@ -45,6 +45,19 @@ el ícono del launcher (color fijo).
 
 **No cambia:** datos de notas, carpetas, fondos, fuentes y acento.
 
+## Fase 4 — Vistas del editor y menú lateral (v0.3.0)
+- **Ojo** en la barra del editor: alterna entre *una hoja* (centrada, ajustada a la pantalla según su
+  orientación; deslizar con un dedo cambia de hoja: izquierda = anterior, derecha = siguiente) y
+  *continua* (todas las hojas en columna con un pequeño espacio; solo visual, sin herramientas).
+- Zoom con pellizco en ambas vistas (visual, no cambia la hoja): una hoja mínimo 25 % del ajuste;
+  continua nunca más pequeña que su tamaño base. Dos dedos rotan la hoja en la vista de una hoja
+  (no se guarda). Doble toque restablece. El stylus se ignora (reservado para dibujar).
+- **Capas:** ícono con número independiente (`LayersView.count`), por ahora 1; solo en vista de una hoja.
+- **Menú lateral** en la biblioteca (tres rayas o deslizar desde la izquierda): Todas las notas,
+  Sin categorizar, Favoritos, Papelera, Categorías, Mis notas, Nueva categoría (todo "Próximamente").
+
+**No cambia:** datos de notas, carpetas, fondos, fuentes, acento y opciones del lápiz.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

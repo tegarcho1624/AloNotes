@@ -50,6 +50,11 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val BRUSH = 33
         const val SMOOTH = 34
         const val EYEDROPPER = 35
+        const val NOTES = 36
+        const val STAR5 = 37
+        const val TRASH = 38
+        const val EYE = 39
+        const val EYE_ALT = 40
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -92,6 +97,17 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         q.lineTo(14f, 9f)
         q.cubicTo(18f, 9f, 20f, 11.5f, 20f, 15f)
         q.cubicTo(20f, 18f, 18f, 19.5f, 15f, 19.5f)
+        c.drawPath(q, p)
+    }
+
+    private fun almond(c: Canvas) {
+        q.reset()
+        q.moveTo(2f, 12f)
+        q.cubicTo(5f, 6.5f, 8.5f, 5f, 12f, 5f)
+        q.cubicTo(15.5f, 5f, 19f, 6.5f, 22f, 12f)
+        q.cubicTo(19f, 17.5f, 15.5f, 19f, 12f, 19f)
+        q.cubicTo(8.5f, 19f, 5f, 17.5f, 2f, 12f)
+        q.close()
         c.drawPath(q, p)
     }
 
@@ -242,6 +258,46 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
                 c.drawPath(q, p)
             }
             EYEDROPPER -> { poly(c, true, 4, 20, 5.5f, 15.5f, 14, 7, 17, 10, 8.5f, 18.5f); ln(c, 13, 5, 19, 11) }
+            NOTES -> { rr(c, 3, 5, 21, 19, 2); ln(c, 7, 10, 17, 10); ln(c, 7, 14, 13, 14) }
+            STAR5 -> {
+                q.reset()
+                for (i in 0 until 10) {
+                    val rad = if (i % 2 == 0) 9f else 4f
+                    val a = Math.toRadians(-90.0 + 36 * i)
+                    val x = 12f + rad * cos(a).toFloat()
+                    val y = 12.8f + rad * sin(a).toFloat()
+                    if (i == 0) q.moveTo(x, y) else q.lineTo(x, y)
+                }
+                q.close()
+                c.drawPath(q, p)
+            }
+            TRASH -> {
+                ln(c, 4, 7, 20, 7); poly(c, false, 9, 7, 9, 4, 15, 4, 15, 7)
+                poly(c, false, 6, 7, 7, 20, 17, 20, 18, 7); ln(c, 10, 11, 10, 16); ln(c, 14, 11, 14, 16)
+            }
+            EYE -> {
+                // Ojo relleno con la pupila vaciada: vista de una sola hoja.
+                p.style = Paint.Style.FILL
+                q.reset()
+                q.fillType = Path.FillType.EVEN_ODD
+                q.moveTo(2f, 12f)
+                q.cubicTo(5f, 6.5f, 8.5f, 5f, 12f, 5f)
+                q.cubicTo(15.5f, 5f, 19f, 6.5f, 22f, 12f)
+                q.cubicTo(19f, 17.5f, 15.5f, 19f, 12f, 19f)
+                q.cubicTo(8.5f, 19f, 5f, 17.5f, 2f, 12f)
+                q.close()
+                q.addCircle(12f, 12f, 3.6f, Path.Direction.CW)
+                c.drawPath(q, p)
+                q.fillType = Path.FillType.WINDING
+                circ(c, 12, 12, 1.5f)
+            }
+            EYE_ALT -> {
+                // Ojo de contorno con iris y pupila: vista continua.
+                almond(c)
+                circ(c, 12, 12, 3.6f)
+                p.style = Paint.Style.FILL
+                circ(c, 12, 12, 1.2f)
+            }
             else -> {}
         }
         c.restore()

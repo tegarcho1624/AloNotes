@@ -41,6 +41,7 @@ class MainActivity : Activity() {
     private lateinit var fabMenu: View
     private lateinit var fab: View
     private lateinit var bgLayer: BackgroundLayer
+    private lateinit var drawer: SideDrawerLayout
     private lateinit var touch: ItemTouchHelper
     private var themeVer = 0
     private var pendingIconFolder: String? = null
@@ -72,7 +73,7 @@ class MainActivity : Activity() {
         bar.gravity = Gravity.CENTER_VERTICAL
         bar.setBackgroundColor(getColor(R.color.sf))
         bar.setPadding(dp(8), 0, dp(8), 0)
-        bar.addView(UiKit.iconBtn(this, Icons.MENU, hi, 48, 24) { UiKit.soon(this) }, UiKit.box(this, 48))
+        bar.addView(UiKit.iconBtn(this, Icons.MENU, hi, 48, 24) { drawer.open() }, UiKit.box(this, 48))
         crumb = LinearLayout(this)
         crumb.gravity = Gravity.CENTER_VERTICAL
         crumb.setPadding(dp(8), 0, 0, 0)
@@ -131,7 +132,11 @@ class MainActivity : Activity() {
         fp.setMargins(0, 0, dp(20), dp(20))
         root.addView(fab, fp)
 
-        setContentView(root)
+        // Menú lateral: botón de tres rayas o deslizar desde la izquierda
+        val panelW = minOf(dp(320), (resources.displayMetrics.widthPixels * 0.85f).toInt())
+        drawer = SideDrawerLayout(this, panelW)
+        drawer.setup(root, DrawerPanel.build(this, drawer))
+        setContentView(drawer)
     }
 
     private fun spanCount(): Int =
@@ -164,7 +169,8 @@ class MainActivity : Activity() {
 
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
-        if (fabMenu.visibility == View.VISIBLE) toggleMenu(false)
+        if (drawer.isOpen) drawer.close()
+        else if (fabMenu.visibility == View.VISIBLE) toggleMenu(false)
         else if (folderId.isNotEmpty()) goUp()
         else super.onBackPressed()
     }

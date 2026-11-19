@@ -12,12 +12,13 @@ import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 
 /**
- * Editor de una nota: barra de herramientas (por ahora todas "Próximamente" salvo
- * volver y crear páginas) y lienzo con las páginas creadas.
+ * Editor de una nota. Dos vistas de hojas (ojo de la barra): una hoja centrada y ajustada a la
+ * pantalla, o continua (solo lectura). Zoom y rotación son solo visuales (ver PageViewport).
+ * El lápiz muestra sus opciones; el trazo llega en la siguiente fase.
  * No hay botón de lápiz flotante: el lápiz del borde es el panel edge de la tablet.
  */
 class EditorActivity : Activity() {
@@ -35,14 +36,15 @@ class EditorActivity : Activity() {
     }
 
     private var docId = ""
-    private lateinit var pagesCol: LinearLayout
-    private lateinit var sv: ScrollView
+    private lateinit var viewport: PageViewport
+    private lateinit var emptyView: LinearLayout
+    private lateinit var layers: LayersView
     private lateinit var counter: TextView
     private lateinit var bar: LinearLayout
+    private lateinit var bgLayer: BackgroundLayer
     private var penOn = false
     private var total = 0
     private var themeVer = 0
-    private lateinit var bgLayer: BackgroundLayer
 
     private fun dp(v: Number) = UiKit.dp(this, v)
 
@@ -56,6 +58,7 @@ class EditorActivity : Activity() {
         }
         docId = id
         themeVer = ThemeUtils.version()
+
         val root = FrameLayout(this)
         bgLayer = BackgroundLayer(this, BgScope.EDITOR)
         root.addView(bgLayer, FrameLayout.LayoutParams(-1, -1))
@@ -63,12 +66,39 @@ class EditorActivity : Activity() {
         col.orientation = LinearLayout.VERTICAL
         root.addView(col, FrameLayout.LayoutParams(-1, -1))
 
-        // Barra de herramientas (se reconstruye al elegir el lápiz o cambiar sus opciones)
+        // Barra de herramientas (se reconstruye al cambiar de vista, lápiz u opciones)
         bar = LinearLayout(this)
         bar.gravity = Gravity.CENTER_VERTICAL
         bar.setPadding(dp(6), 0, dp(6), 0)
         counter = UiKit.text(this, "0 / 0", 17, getColor(R.color.ink))
         counter.gravity = Gravity.CENTER
+
+        // Área de hojas
+        val area = FrameLayout(this)
+        viewport = PageViewport(this)
+        viewport.restore(b?.getBoolean("cont") ?: false, b?.getInt("page") ?: 0)
+        viewport.onPage = { updateCounter() }
+        area.addView(viewport, FrameLayout.LayoutParams(-1, -1))
+
+        emptyView = LinearLayout(this)
+        emptyView.orientation = LinearLayout.VERTICAL
+        emptyView.gravity = Gravity.CENTER_HORIZONTAL
+        emptyView.addView(UiKit.text(this, "Sin páginas todavía", 16, getColor(R.color.mut)))
+        val bt = UiKit.btn(this, "Crear páginas", ThemeUtils.accent(this))
+        bt.setOnClickListener { createPages() }
+        val bp = LinearLayout.LayoutParams(-2, -2)
+        bp.topMargin = dp(16)
+        emptyView.addView(bt, bp)
+        area.addView(emptyView, FrameLayout.LayoutParams(-2, -2, Gravity.CENTER))
+
+        // Capas: ícono con número (por ahora solo hay una capa)
+        layers = LayersView(this)
+        layers.count = 1
+        layers.setOnClickListener { UiKit.soon(this) }
+        val lp = FrameLayout.LayoutParams(dp(60), dp(60), Gravity.BOTTOM or Gravity.END)
+        lp.setMargins(0, 0, dp(22), dp(22))
+        area.addView(layers, lp)
+
         buildBar()
         val hsv = HorizontalScrollView(this)
         hsv.isFillViewport = true
@@ -79,20 +109,19 @@ class EditorActivity : Activity() {
         val line = View(this)
         line.setBackgroundColor(getColor(R.color.ln))
         col.addView(line, LinearLayout.LayoutParams(-1, dp(1)))
-
-        // Lienzo de páginas
-        sv = ScrollView(this)
-        pagesCol = LinearLayout(this)
-        pagesCol.orientation = LinearLayout.VERTICAL
-        pagesCol.gravity = Gravity.CENTER_HORIZONTAL
-        pagesCol.setPadding(dp(24), dp(24), dp(24), dp(120))
-        sv.addView(pagesCol, ViewGroup.LayoutParams(-1, -2))
-        sv.setOnScrollChangeListener { _, _, _, _, _ -> updateCounter() }
-        col.addView(sv, LinearLayout.LayoutParams(-1, 0, 1f))
+        col.addView(area, LinearLayout.LayoutParams(-1, 0, 1f))
 
         setContentView(root)
         renderPages()
         if (b == null && intent.getBooleanExtra("new", false) && total == 0) createPages()
+    }
+
+    override fun onSaveInstanceState(o: Bundle) {
+        super.onSaveInstanceState(o)
+        if (::viewport.isInitialized) {
+            o.putBoolean("cont", viewport.continuous)
+            o.putInt("page", viewport.index)
+        }
     }
 
     override fun onResume() {
@@ -109,9 +138,12 @@ class EditorActivity : Activity() {
         super.onPause()
     }
 
+    // ---------- Barra ----------
+
     private fun buildBar() {
         val ink = ThemeUtils.accentHi(this)
         val mut = getColor(R.color.mut)
+        val cont = viewport.continuous
         bar.removeAllViews()
         bar.addView(tb(Icons.BACK, ink) { finish() }, UiKit.box(this, 44))
         bar.addView(tb(Icons.GRID, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
@@ -119,17 +151,19 @@ class EditorActivity : Activity() {
         bar.addView(View(this), LinearLayout.LayoutParams(dp(22), 1))
         // Lápiz: seleccionable; muestra sus opciones a la derecha de las herramientas
         val penBtn = tb(PenOptions.typeIcon(PenStore.type(this)), ink) {
-            penOn = !penOn
-            buildBar()
+            editOnly {
+                penOn = !penOn
+                buildBar()
+            }
         }
-        if (penOn) UiKit.ripple(this, penBtn, 12, ThemeUtils.accentBg(this))
+        if (penOn && !cont) UiKit.ripple(this, penBtn, 12, ThemeUtils.accentBg(this))
         bar.addView(penBtn, UiKit.box(this, 44))
         val others = intArrayOf(
             Icons.MARKER, Icons.ERASER, Icons.TEXT, Icons.SHAPES, Icons.IMAGE, Icons.STAR, Icons.SELECT
         )
-        for (t in others) bar.addView(tb(t, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+        for (t in others) bar.addView(tb(t, ink) { editOnly { UiKit.soon(this) } }, UiKit.box(this, 44))
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        if (penOn) {
+        if (penOn && !cont) {
             PenOptions.build(this, bar) { buildBar() }
         } else {
             bar.addView(tb(Icons.UNDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
@@ -137,6 +171,11 @@ class EditorActivity : Activity() {
             bar.addView(tb(Icons.REDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
         }
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        // Ojo: alterna entre una hoja y vista continua
+        val eye = UiKit.iconBtn(this, if (cont) Icons.EYE_ALT else Icons.EYE, getColor(R.color.ink), 44, 28) {
+            toggleView()
+        }
+        bar.addView(eye, UiKit.box(this, 44))
         bar.addView(tb(Icons.LOCK, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
         bar.addView(tb(Icons.ROT_L, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
         bar.addView(tb(Icons.ROT_R, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
@@ -151,56 +190,49 @@ class EditorActivity : Activity() {
     private fun tb(type: Int, color: Int, l: () -> Unit): View =
         UiKit.iconBtn(this, type, color, 44, 24, l)
 
+    /** Las herramientas de edición no se usan en la vista continua (solo visual). */
+    private fun editOnly(run: () -> Unit) {
+        if (viewport.continuous) {
+            Toast.makeText(this, "Vista continua: solo visual", Toast.LENGTH_SHORT).show()
+        } else {
+            run()
+        }
+    }
+
+    private fun toggleView() {
+        viewport.setMode(!viewport.continuous)
+        if (viewport.continuous) penOn = false
+        layers.visibility = if (total > 0 && !viewport.continuous) View.VISIBLE else View.GONE
+        buildBar()
+        updateCounter()
+    }
+
     // ---------- Páginas ----------
 
     private fun renderPages() {
         val doc = NoteStore.get(this, docId)
-        pagesCol.removeAllViews()
-        total = doc?.pages?.length() ?: 0
-        if (doc == null || total == 0) {
-            val e = UiKit.text(this, "Sin páginas todavía", 16, getColor(R.color.mut))
-            e.setPadding(0, dp(80), 0, dp(16))
-            pagesCol.addView(e)
-            val bt = UiKit.btn(this, "Crear páginas", ThemeUtils.accent(this))
-            bt.setOnClickListener { createPages() }
-            pagesCol.addView(bt, LinearLayout.LayoutParams(-2, -2))
-            updateCounter()
-            return
+        val specs = ArrayList<PageViewport.Spec>()
+        if (doc != null) {
+            for (i in 0 until doc.pages.length()) {
+                val pg = doc.pages.optJSONObject(i) ?: continue
+                var di = 1
+                for (k in DIMS.indices) if (DIMS[k] == pg.optString("d")) di = k
+                val a = MM[di][0]
+                val b = MM[di][1]
+                val land = pg.optString("o") != "P"
+                val bg = pg.optInt("bg", 0xFFFFFFFF.toInt())
+                specs.add(if (land) PageViewport.Spec(maxOf(a, b), minOf(a, b), bg) else PageViewport.Spec(minOf(a, b), maxOf(a, b), bg))
+            }
         }
-        val sw = resources.displayMetrics.widthPixels
-        val base = minOf(sw - dp(64), dp(720))
-        for (i in 0 until total) {
-            val pg = doc.pages.optJSONObject(i) ?: continue
-            var di = 1
-            for (k in DIMS.indices) if (DIMS[k] == pg.optString("d")) di = k
-            val ratio = MM[di][1] / MM[di][0]
-            val land = pg.optString("o") != "P"
-            val w = if (land) base else Math.round(base * 0.72f)
-            val h = if (land) Math.round(base / ratio) else Math.round(w * ratio)
-            val page = View(this)
-            page.background = UiKit.rect(this, pg.optInt("bg", 0xFFFFFFFF.toInt()), 2)
-            page.elevation = dp(4).toFloat()
-            val lp = LinearLayout.LayoutParams(w, h)
-            lp.bottomMargin = dp(20)
-            pagesCol.addView(page, lp)
-        }
+        total = specs.size
+        viewport.setPages(specs)
+        emptyView.visibility = if (total == 0) View.VISIBLE else View.GONE
+        layers.visibility = if (total > 0 && !viewport.continuous) View.VISIBLE else View.GONE
         updateCounter()
     }
 
     private fun updateCounter() {
-        if (total == 0) {
-            counter.text = "0 / 0"
-            return
-        }
-        val center = sv.scrollY + sv.height / 2
-        var cur = total
-        for (i in 0 until pagesCol.childCount) {
-            if (pagesCol.getChildAt(i).bottom >= center) {
-                cur = i + 1
-                break
-            }
-        }
-        counter.text = minOf(cur, total).toString() + " / " + total
+        counter.text = if (total == 0) "0 / 0" else (viewport.index + 1).toString() + " / " + total
     }
 
     // ---------- Diálogo "Crear páginas nuevas" ----------
