@@ -82,6 +82,18 @@ el ícono del launcher (color fijo).
   (toque largo = selector con círculo cromático, HEX y paleta guardada compartida con el lápiz).
 - El borrador también quita partes del marca texto. Datos: `pen` (`hl_*`); en el archivo de trazos es el tipo 3.
 
+## Fase 6 — Panel flotante de capas (v0.5.0)
+- Al tocar el ícono de capas (vista de una hoja) aparece un **panel flotante** (`LayersPanel.kt`) sobre la hoja,
+  abajo a la derecha. Se **arrastra por su barra superior** y nunca sale del área de hojas.
+- Dos estados: **expandido** (barra "Capas" con arrastre, minimizar y cerrar; lista de capas con ojo; barra inferior con
+  porcentaje y control deslizante) y **minimizado** (cuadro con el número de capas; se arrastra igual y un toque lo expande).
+  Cerrar (X) devuelve el ícono de capas. En vista continua el panel se oculta y vuelve al regresar a una hoja.
+- Estado (abierto, minimizado, posición) se conserva al girar la tablet o cambiar acento/fuente; no se guarda al cerrar la nota.
+- Solo visual: la lista muestra "Capa 1" y la opacidad aún no cambia nada. Las capas reales (crear, ocultar, reordenar, opacidad)
+  y su formato de guardado son la siguiente fase. Íconos nuevos: `MINIMIZE` y `GRIP`.
+
+**No cambia:** datos de notas, trazos (`strokes/*.bin`), carpetas, fondos, fuentes, acento y opciones del lápiz.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

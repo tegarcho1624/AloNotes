@@ -39,6 +39,7 @@ class EditorActivity : Activity() {
     private lateinit var viewport: PageViewport
     private lateinit var emptyView: LinearLayout
     private lateinit var layers: LayersView
+    private lateinit var layersPanel: LayersPanel
     private lateinit var counter: TextView
     private lateinit var bar: LinearLayout
     private lateinit var bgLayer: BackgroundLayer
@@ -98,10 +99,21 @@ class EditorActivity : Activity() {
         // Capas: ícono con número (por ahora solo hay una capa)
         layers = LayersView(this)
         layers.count = 1
-        layers.setOnClickListener { UiKit.soon(this) }
+        layers.setOnClickListener {
+            layersPanel.open()
+            updateLayersUi()
+        }
         val lp = FrameLayout.LayoutParams(dp(60), dp(60), Gravity.BOTTOM or Gravity.END)
         lp.setMargins(0, 0, dp(22), dp(22))
         area.addView(layers, lp)
+
+        // Panel flotante de capas (arrastrable, expandido o minimizado)
+        layersPanel = LayersPanel(this)
+        layersPanel.count = 1
+        layersPanel.onClose = { updateLayersUi() }
+        if (b != null) layersPanel.restore(b)
+        area.addView(layersPanel, FrameLayout.LayoutParams(dp(60), dp(60), Gravity.TOP or Gravity.START))
+        area.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layersPanel.refit() }
 
         buildBar()
         val hsv = HorizontalScrollView(this)
@@ -126,6 +138,7 @@ class EditorActivity : Activity() {
             o.putBoolean("cont", viewport.continuous)
             o.putInt("page", viewport.index)
         }
+        if (::layersPanel.isInitialized) layersPanel.save(o)
     }
 
     override fun onResume() {
@@ -221,9 +234,16 @@ class EditorActivity : Activity() {
             tool = 0
             viewport.tool = 0
         }
-        layers.visibility = if (total > 0 && !viewport.continuous) View.VISIBLE else View.GONE
+        updateLayersUi()
         buildBar()
         updateCounter()
+    }
+
+    /** Ícono de capas o panel flotante, según el estado (ambos solo en la vista de una hoja). */
+    private fun updateLayersUi() {
+        val ok = total > 0 && !viewport.continuous
+        layersPanel.visibility = if (ok && layersPanel.opened) View.VISIBLE else View.GONE
+        layers.visibility = if (ok && !layersPanel.opened) View.VISIBLE else View.GONE
     }
 
     // ---------- Páginas ----------
@@ -246,7 +266,7 @@ class EditorActivity : Activity() {
         total = specs.size
         viewport.setPages(specs)
         emptyView.visibility = if (total == 0) View.VISIBLE else View.GONE
-        layers.visibility = if (total > 0 && !viewport.continuous) View.VISIBLE else View.GONE
+        updateLayersUi()
         updateCounter()
     }
 

@@ -55,6 +55,8 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val TRASH = 38
         const val EYE = 39
         const val EYE_ALT = 40
+        const val MINIMIZE = 41
+        const val GRIP = 42
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -304,6 +306,8 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
                 p.style = Paint.Style.FILL
                 circ(c, 12, 12, 1.2f)
             }
+            MINIMIZE -> { rr(c, 4, 4, 20, 20, 3); ln(c, 8, 15, 16, 15) }
+            GRIP -> ln(c, 6, 12, 18, 12)
             else -> {}
         }
         c.restore()
