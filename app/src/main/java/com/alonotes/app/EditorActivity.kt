@@ -18,7 +18,7 @@ import android.widget.Toast
 /**
  * Editor de una nota. Dos vistas de hojas (ojo de la barra): una hoja centrada y ajustada a la
  * pantalla, o continua (solo lectura). Zoom y rotación son solo visuales (ver PageViewport).
- * El lápiz muestra sus opciones; el trazo llega en la siguiente fase.
+ * Lápiz (lápiz/pluma/pincel) y borrador dibujan y borran sobre la hoja; los trazos se guardan por nota.
  * No hay botón de lápiz flotante: el lápiz del borde es el panel edge de la tablet.
  */
 class EditorActivity : Activity() {
@@ -42,7 +42,8 @@ class EditorActivity : Activity() {
     private lateinit var counter: TextView
     private lateinit var bar: LinearLayout
     private lateinit var bgLayer: BackgroundLayer
-    private var penOn = false
+    private var tool = 0 // 0 ninguna, 1 lápiz, 2 borrador
+    private lateinit var strokes: DocStrokes
     private var total = 0
     private var themeVer = 0
 
@@ -78,6 +79,9 @@ class EditorActivity : Activity() {
         viewport = PageViewport(this)
         viewport.restore(b?.getBoolean("cont") ?: false, b?.getInt("page") ?: 0)
         viewport.onPage = { updateCounter() }
+        strokes = StrokeStore.load(this, docId)
+        viewport.strokes = strokes
+        viewport.onChanged = { StrokeStore.saveAsync(this, docId, strokes) }
         area.addView(viewport, FrameLayout.LayoutParams(-1, -1))
 
         emptyView = LinearLayout(this)
@@ -149,26 +153,26 @@ class EditorActivity : Activity() {
         bar.addView(tb(Icons.GRID, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
         bar.addView(tb(Icons.PLUS, ink) { createPages() }, UiKit.box(this, 44))
         bar.addView(View(this), LinearLayout.LayoutParams(dp(22), 1))
-        // Lápiz: seleccionable; muestra sus opciones a la derecha de las herramientas
-        val penBtn = tb(PenOptions.typeIcon(PenStore.type(this)), ink) {
-            editOnly {
-                penOn = !penOn
-                buildBar()
-            }
-        }
-        if (penOn && !cont) UiKit.ripple(this, penBtn, 12, ThemeUtils.accentBg(this))
+        // Lápiz (1) y borrador (2): se resaltan y muestran sus opciones; el resto, próximamente
+        val penBtn = tb(PenOptions.typeIcon(PenStore.type(this)), ink) { pickTool(1) }
+        if (tool == 1 && !cont) UiKit.ripple(this, penBtn, 12, ThemeUtils.accentBg(this))
         bar.addView(penBtn, UiKit.box(this, 44))
-        val others = intArrayOf(
-            Icons.MARKER, Icons.ERASER, Icons.TEXT, Icons.SHAPES, Icons.IMAGE, Icons.STAR, Icons.SELECT
-        )
+        bar.addView(tb(Icons.MARKER, ink) { editOnly { UiKit.soon(this) } }, UiKit.box(this, 44))
+        val eraserBtn = tb(Icons.ERASER, ink) { pickTool(2) }
+        if (tool == 2 && !cont) UiKit.ripple(this, eraserBtn, 12, ThemeUtils.accentBg(this))
+        bar.addView(eraserBtn, UiKit.box(this, 44))
+        val others = intArrayOf(Icons.TEXT, Icons.SHAPES, Icons.IMAGE, Icons.STAR, Icons.SELECT)
         for (t in others) bar.addView(tb(t, ink) { editOnly { UiKit.soon(this) } }, UiKit.box(this, 44))
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
-        if (penOn && !cont) {
+        if (tool == 1 && !cont) {
             PenOptions.build(this, bar) { buildBar() }
+        } else if (tool == 2 && !cont) {
+            PenOptions.buildEraser(this, bar) { buildBar() }
         } else {
-            bar.addView(tb(Icons.UNDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
+            // Flechas de página: anterior / siguiente
+            bar.addView(tb(Icons.UNDO, ink) { viewport.prevPage() }, UiKit.box(this, 44))
             bar.addView(counter, LinearLayout.LayoutParams(dp(90), -2))
-            bar.addView(tb(Icons.REDO, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
+            bar.addView(tb(Icons.REDO, ink) { viewport.nextPage() }, UiKit.box(this, 44))
         }
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         // Ojo: alterna entre una hoja y vista continua
@@ -187,6 +191,14 @@ class EditorActivity : Activity() {
         bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
     }
 
+    private fun pickTool(t: Int) {
+        editOnly {
+            tool = if (tool == t) 0 else t
+            viewport.tool = tool
+            buildBar()
+        }
+    }
+
     private fun tb(type: Int, color: Int, l: () -> Unit): View =
         UiKit.iconBtn(this, type, color, 44, 24, l)
 
@@ -201,7 +213,10 @@ class EditorActivity : Activity() {
 
     private fun toggleView() {
         viewport.setMode(!viewport.continuous)
-        if (viewport.continuous) penOn = false
+        if (viewport.continuous) {
+            tool = 0
+            viewport.tool = 0
+        }
         layers.visibility = if (total > 0 && !viewport.continuous) View.VISIBLE else View.GONE
         buildBar()
         updateCounter()

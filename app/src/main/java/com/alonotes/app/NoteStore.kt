@@ -133,6 +133,7 @@ internal object NoteStore {
         }
         for (g in gone) {
             FolderIconStore.remove(c, g)
+            StrokeStore.delete(c, g)
             ArchiveStore.set(c, g, false)
         }
         save(c, all.filter { !gone.contains(it.id) })

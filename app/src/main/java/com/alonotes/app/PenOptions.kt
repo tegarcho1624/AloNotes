@@ -87,6 +87,26 @@ internal object PenOptions {
         bar.addView(group)
     }
 
+    /** Opciones del borrador: tres tamaños (fino, normal, grande). */
+    fun buildEraser(a: Activity, bar: LinearLayout, rebuild: () -> Unit) {
+        fun dp(v: Number) = UiKit.dp(a, v)
+        val ink = a.getColor(R.color.ink)
+        val sel = PenStore.eraser(a)
+        val sizes = intArrayOf(12, 22, 32)
+        for (i in 0..2) {
+            val f = FrameLayout(a)
+            val c = View(a)
+            c.background = UiKit.oval(a, ink, ThemeUtils.accentHi(a), if (i == sel) 2.5f else 0f)
+            f.addView(c, FrameLayout.LayoutParams(dp(sizes[i]), dp(sizes[i]), Gravity.CENTER))
+            UiKit.ripple(a, f, 14, 0)
+            f.setOnClickListener {
+                PenStore.setEraser(a, i)
+                rebuild()
+            }
+            bar.addView(f, LinearLayout.LayoutParams(dp(54), dp(44)))
+        }
+    }
+
     private fun divider(a: Activity): View {
         val d = View(a)
         d.setBackgroundColor(a.getColor(R.color.ln2))

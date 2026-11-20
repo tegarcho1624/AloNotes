@@ -64,6 +64,18 @@ el ícono del launcher (color fijo).
 - Al reabrir una nota las hojas aparecían vacías hasta pulsar el ojo: la vista se reconstruía en
   mitad del layout y la hoja quedaba sin medir; ahora se reconstruye justo después.
 
+## Fase 5 — Dibujar y borrar (v0.4.0)
+- **Lápiz / pluma / pincel** dibujan en la hoja actual (vista de una hoja) con el color, grosor
+  (fino/normal/denso) y suavizado elegidos. Pluma y pincel varían el grosor con la presión del stylus
+  (con el dedo, según la velocidad). Dos dedos siguen haciendo zoom/rotación/desplazamiento; si se usa
+  stylus, la palma (dedos sueltos) se ignora.
+- **Borrador** quita partes de los trazos (parte los trazos) con tamaño fino/normal/grande
+  (radios 1,5 / 4 / 9 mm); muestra un círculo donde borra.
+- Los trazos se guardan por nota en `filesDir/strokes/<id>.bin` (milímetros de la hoja, binario compacto),
+  en segundo plano; se borran junto con la nota. La vista continua los muestra (solo lectura).
+- Las flechas junto al contador ahora pasan a la hoja anterior / siguiente.
+- Pendiente: deshacer/rehacer, miniaturas con trazos en la biblioteca, resaltador.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

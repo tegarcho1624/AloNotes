@@ -160,6 +160,15 @@ internal object PenStore {
     fun width(c: Context): Int = sp(c).getInt("width", 1).coerceIn(0, 2)
     fun setWidth(c: Context, v: Int) = sp(c).edit().putInt("width", v).apply()
 
+    fun eraser(c: Context): Int = sp(c).getInt("eraser", 1).coerceIn(0, 2)
+    fun setEraser(c: Context, v: Int) = sp(c).edit().putInt("eraser", v).apply()
+
+    /** Grosor del trazo (mm de la hoja) según fino / normal / denso. */
+    fun widthMm(idx: Int): Float = floatArrayOf(0.35f, 0.8f, 1.8f)[idx.coerceIn(0, 2)]
+
+    /** Radio del borrador (mm de la hoja) según fino / normal / grande. */
+    fun eraserMm(idx: Int): Float = floatArrayOf(1.5f, 4f, 9f)[idx.coerceIn(0, 2)]
+
     fun colorIdx(c: Context): Int = sp(c).getInt("color_idx", 0).coerceIn(0, 3)
     fun setColorIdx(c: Context, v: Int) = sp(c).edit().putInt("color_idx", v).apply()
 

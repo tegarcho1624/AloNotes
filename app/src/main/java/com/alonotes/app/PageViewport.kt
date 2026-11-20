@@ -1,7 +1,7 @@
 package com.alonotes.app
 
 import android.content.Context
-import android.graphics.drawable.GradientDrawable
+import android.graphics.Matrix
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -13,6 +13,7 @@ import android.widget.LinearLayout
 import android.widget.OverScroller
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
@@ -21,14 +22,15 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
- * Área de hojas del editor, con dos vistas (solo visuales: nada de esto se guarda en la hoja):
- *  - Una hoja (Single Page View / Fit to Screen): la hoja actual centrada y ajustada a la pantalla,
- *    con su orientación. Un dedo desliza para cambiar de hoja (las hojas van de izquierda a derecha:
- *    a la izquierda = siguiente, a la derecha = anterior); pellizco = zoom (mínimo 25 % del ajuste, la hoja nunca desaparece); dos dedos =
- *    rotar; con zoom, un dedo mueve la hoja; doble toque = restablecer.
- *  - Continua (Continuous Scroll / Multi-page): todas las hojas en columna con un pequeño espacio;
- *    solo lectura. Pellizco = zoom (nunca más pequeño que el tamaño base), un dedo = desplazar.
- * El lápiz (stylus) se ignora aquí: queda reservado para dibujar.
+ * Área de hojas del editor, con dos vistas:
+ *  - Una hoja (Single Page View / Fit to Screen): la hoja actual centrada y ajustada a la pantalla.
+ *    Sin herramienta: un dedo desliza para cambiar de hoja (a la izquierda = siguiente, a la derecha
+ *    = anterior). Pellizco = zoom (mínimo 25 % del ajuste), dos dedos = rotar (solo visual, no se
+ *    guarda), con zoom un dedo mueve la hoja, doble toque = restablecer.
+ *    Con herramienta (lápiz o borrador): un dedo o el stylus dibuja/borra; dos dedos siguen
+ *    haciendo zoom, rotación y desplazamiento. Si se usa stylus, los dedos sueltos (la palma) se ignoran.
+ *  - Continua (Continuous Scroll / Multi-page): todas las hojas en columna; solo lectura.
+ * Los trazos se guardan en milímetros de la hoja, así que no dependen del zoom ni de la rotación.
  */
 internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     class Spec(val wMm: Float, val hMm: Float, val bg: Int)
@@ -39,8 +41,17 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         private set
     var onPage: (() -> Unit)? = null
 
+    /** 0 ninguna, 1 lápiz, 2 borrador (solo en la vista de una hoja). */
+    var tool = 0
+        set(v) {
+            if (v != field) cancelStroke()
+            field = v
+        }
+    var strokes: DocStrokes? = null
+    var onChanged: ((Int) -> Unit)? = null
+
     private var specs: List<Spec> = emptyList()
-    private var single: View? = null
+    private var single: PageView? = null
     private var column: LinearLayout? = null
 
     // Transformación visual actual.
@@ -70,6 +81,26 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         }
     })
 
+    // Dibujo.
+    private var penDown = false
+    private var live: FloatList? = null
+    private var erasing = false
+    private var erasedDirty = false
+    private var lastStylusT = -10000L
+    private var penType = 0
+    private var penColor = 0
+    private var penW = 0.8f
+    private var penK = 1f
+    private var eraserR = 4f
+    private var sxm = 0f // posición suavizada (mm)
+    private var sym = 0f
+    private var lastX = 0f // último punto crudo (mm)
+    private var lastY = 0f
+    private var lastT = 0L
+    private var lastP = 0.7f
+    private var eLX = 0f
+    private var eLY = 0f
+
     private fun dp(v: Number) = (v.toFloat() * d).roundToInt()
     private fun minZ() = if (continuous) 1f else 0.25f
     private val maxZ = 5f
@@ -82,6 +113,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     }
 
     fun setPages(list: List<Spec>) {
+        cancelStroke()
         specs = list
         index = index.coerceIn(0, max(0, list.size - 1))
         resetTransform()
@@ -90,8 +122,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     fun setMode(cont: Boolean) {
         if (cont == continuous) return
+        cancelStroke()
         if (continuous) index = visibleIndex()
         continuous = cont
+        if (cont) tool = 0
         resetTransform()
         rebuild()
         onPage?.invoke()
@@ -106,6 +140,20 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (continuous) scrollToIndex(index) else applyTransform()
     }
 
+    fun prevPage() = goToPage(index - 1)
+    fun nextPage() = goToPage(index + 1)
+
+    fun goToPage(i: Int) {
+        if (i < 0 || i >= specs.size || i == index) return
+        if (continuous) {
+            index = i
+            scrollToIndex(i)
+            onPage?.invoke()
+        } else {
+            goTo(i, i > index)
+        }
+    }
+
     // ---------- Construcción ----------
 
     private fun resetTransform() {
@@ -118,27 +166,26 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
         super.onSizeChanged(w, h, ow, oh)
+        // Se reconstruye justo después del layout: añadir hojas en pleno layout las dejaba sin medir.
         if (w > 0 && h > 0) post { rebuild() }
     }
 
-    private fun pageBg(color: Int): GradientDrawable {
-        val g = GradientDrawable()
-        g.setColor(color)
-        g.cornerRadius = 2 * d
-        return g
+    private fun pageAt(i: Int): PageView {
+        val sp = specs[i]
+        return PageView(context, sp) { strokes?.page(i) ?: emptyList() }
     }
 
     private fun rebuild() {
+        cancelStroke()
         removeAllViews()
         single = null
         column = null
         if (specs.isEmpty() || width == 0 || height == 0) return
         if (!continuous) {
-            val sp = specs[index.coerceIn(0, specs.size - 1)]
+            val i = index.coerceIn(0, specs.size - 1)
+            val sp = specs[i]
             val k = min(width / sp.wMm, height / sp.hMm)
-            val v = View(context)
-            v.background = pageBg(sp.bg)
-            v.elevation = 4 * d
+            val v = pageAt(i)
             addView(v, LayoutParams((sp.wMm * k).roundToInt(), (sp.hMm * k).roundToInt(), Gravity.CENTER))
             single = v
         } else {
@@ -148,18 +195,16 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             col.setPadding(0, dp(24), 0, dp(24))
             val base = min(width - dp(64), dp(720)).toFloat()
             var totalH = dp(24) * 2
-            for (sp in specs) {
+            for ((i, sp) in specs.withIndex()) {
                 val k = base / max(sp.wMm, sp.hMm)
-                val v = View(context)
-                v.background = pageBg(sp.bg)
-                v.elevation = 4 * d
+                val v = pageAt(i)
                 val ph = (sp.hMm * k).roundToInt()
                 val lp = LinearLayout.LayoutParams((sp.wMm * k).roundToInt(), ph)
                 lp.bottomMargin = dp(20)
                 col.addView(v, lp)
                 totalH += ph + dp(20)
             }
-            // Altura exacta (páginas de la 1 arriba a la última abajo) para poder desplazarse.
+            // Altura exacta (hoja 1 arriba, última abajo) para poder desplazarse.
             addView(col, LayoutParams(width, totalH))
             column = col
             col.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
@@ -248,7 +293,192 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         onPage?.invoke()
     }
 
-    // ---------- Gestos ----------
+    /** Punto de pantalla (de este contenedor) -> milímetros de la hoja actual, deshaciendo zoom y rotación. */
+    private fun toPage(px: Float, py: Float): FloatArray? {
+        val v = single ?: return null
+        val pts = floatArrayOf(px - v.left, py - v.top)
+        val inv = Matrix()
+        if (!v.matrix.invert(inv)) return null
+        inv.mapPoints(pts)
+        val sc = v.width / v.spec.wMm
+        if (sc <= 0f) return null
+        return floatArrayOf(pts[0] / sc, pts[1] / sc)
+    }
+
+    // ---------- Dibujo y borrado ----------
+
+    private fun beginStroke(e: MotionEvent, stylus: Boolean) {
+        // Palma: si hay stylus en uso, los dedos sueltos no dibujan.
+        if (!stylus && e.eventTime - lastStylusT < 1500) return
+        val v = single ?: return
+        val pt = toPage(e.x, e.y) ?: return
+        penDown = true
+        lastX = pt[0]
+        lastY = pt[1]
+        lastT = e.eventTime
+        lastP = if (stylus) e.pressure.coerceIn(0.05f, 1f) else 0.7f
+        if (tool == 2) {
+            erasing = true
+            erasedDirty = false
+            eraserR = PenStore.eraserMm(PenStore.eraser(context))
+            eLX = pt[0]
+            eLY = pt[1]
+            eraseTo(pt)
+        } else {
+            penType = PenStore.type(context)
+            penColor = PenStore.colors(context)[PenStore.colorIdx(context)]
+            penW = PenStore.widthMm(PenStore.width(context))
+            penK = 1f - (PenStore.smoothing(context) / 100f) * 0.9f
+            live = null
+            val sp = v.spec
+            if (pt[0] in 0f..sp.wMm && pt[1] in 0f..sp.hMm) startLive(pt[0], pt[1], lastP)
+            refreshLive()
+        }
+    }
+
+    private fun startLive(x: Float, y: Float, p: Float) {
+        val l = FloatList()
+        l.add(x)
+        l.add(y)
+        l.add(p)
+        live = l
+        sxm = x
+        sym = y
+    }
+
+    private fun feed(px: Float, py: Float, pr: Float, t: Long, stylus: Boolean) {
+        val v = single ?: return
+        val pt = toPage(px, py) ?: return
+        if (erasing) {
+            eraseTo(pt)
+            return
+        }
+        val p: Float
+        if (stylus) {
+            p = pr.coerceIn(0.05f, 1f)
+        } else {
+            val dt = max(1L, t - lastT).toFloat()
+            val speed = hypot(pt[0] - lastX, pt[1] - lastY) / dt // mm por ms
+            val target = (0.9f - speed * 0.9f).coerceIn(0.25f, 0.9f)
+            p = lastP + (target - lastP) * 0.3f
+        }
+        lastX = pt[0]
+        lastY = pt[1]
+        lastT = t
+        lastP = p
+        val sp = v.spec
+        if (pt[0] !in 0f..sp.wMm || pt[1] !in 0f..sp.hMm) {
+            commitLive() // salió de la hoja: termina el trazo; si vuelve a entrar empieza otro
+            return
+        }
+        if (live == null) {
+            startLive(pt[0], pt[1], p)
+            return
+        }
+        sxm += (pt[0] - sxm) * penK // suavizado
+        sym += (pt[1] - sym) * penK
+        addDense(sxm, sym, p)
+    }
+
+    /** Añade un punto asegurando ≤ 0,6 mm entre puntos (el borrador y el trazo lo necesitan). */
+    private fun addDense(x: Float, y: Float, p: Float) {
+        val l = live ?: return
+        if (l.isEmpty()) {
+            l.add(x)
+            l.add(y)
+            l.add(p)
+            return
+        }
+        val px = l[l.size - 3]
+        val py = l[l.size - 2]
+        val pp = l[l.size - 1]
+        val dist = hypot(x - px, y - py)
+        if (dist < 0.15f) return
+        val steps = ceil(dist / 0.6f).toInt().coerceAtLeast(1)
+        for (k in 1..steps) {
+            val t = k / steps.toFloat()
+            l.add(px + (x - px) * t)
+            l.add(py + (y - py) * t)
+            l.add(pp + (p - pp) * t)
+        }
+    }
+
+    private fun refreshLive() {
+        val v = single ?: return
+        val l = live
+        v.live = if (l != null && !l.isEmpty()) Stroke(penType, penColor, penW, l.toArray()) else null
+        v.invalidate()
+    }
+
+    private fun commitLive() {
+        val l = live ?: return
+        live = null
+        val v = single
+        v?.live = null
+        if (l.size >= 3) {
+            strokes?.page(index)?.add(Stroke(penType, penColor, penW, l.toArray()))
+            onChanged?.invoke(index)
+        }
+        v?.invalidate()
+    }
+
+    private fun eraseTo(pt: FloatArray) {
+        val list = strokes?.page(index) ?: return
+        val dx = pt[0] - eLX
+        val dy = pt[1] - eLY
+        val steps = max(1, ceil(hypot(dx, dy) / (eraserR * 0.5f)).toInt())
+        for (k in 1..steps) {
+            val f = k / steps.toFloat()
+            if (StrokeOps.eraseAt(list, eLX + dx * f, eLY + dy * f, eraserR)) erasedDirty = true
+        }
+        eLX = pt[0]
+        eLY = pt[1]
+        single?.setCursor(pt[0], pt[1], eraserR)
+        if (erasedDirty) single?.invalidate()
+    }
+
+    private fun drawMove(e: MotionEvent, stylus: Boolean) {
+        for (h in 0 until e.historySize) {
+            feed(e.getHistoricalX(h), e.getHistoricalY(h), e.getHistoricalPressure(h), e.getHistoricalEventTime(h), stylus)
+        }
+        feed(e.x, e.y, e.pressure, e.eventTime, stylus)
+        if (!erasing) refreshLive()
+    }
+
+    private fun endStroke(e: MotionEvent) {
+        if (erasing) {
+            erasing = false
+            single?.clearCursor()
+            if (erasedDirty) onChanged?.invoke(index)
+            erasedDirty = false
+        } else {
+            // Último punto sin suavizar para que el trazo llegue hasta donde se levantó la punta.
+            val pt = toPage(e.x, e.y)
+            val sp = single?.spec
+            if (pt != null && sp != null && live != null && pt[0] in 0f..sp.wMm && pt[1] in 0f..sp.hMm) {
+                addDense(pt[0], pt[1], lastP)
+            }
+            commitLive()
+        }
+        penDown = false
+    }
+
+    private fun cancelStroke() {
+        if (erasing) {
+            erasing = false
+            single?.clearCursor()
+            if (erasedDirty) onChanged?.invoke(index)
+            erasedDirty = false
+        }
+        if (live != null) {
+            live = null
+            single?.live = null
+            single?.invalidate()
+        }
+        penDown = false
+    }
+
+    // ---------- Gestos de vista ----------
 
     private fun initTwo(e: MotionEvent) {
         val x0 = e.getX(0)
@@ -307,7 +537,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val dy = e.y - ly
         lx = e.x
         ly = e.y
-        if (continuous || z > 1.05f) {
+        if (continuous || (tool == 0 && z > 1.05f)) {
             tx += dx
             ty += dy
             clamp()
@@ -331,9 +561,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (specs.isEmpty()) return false
-        // El stylus no mueve la vista: queda reservado para dibujar.
-        if (e.pointerCount == 1 && e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) return false
-        gd.onTouchEvent(e)
+        val stylus = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
+        val drawTool = tool != 0 && !continuous && single != null
+        if (stylus) lastStylusT = e.eventTime
+        // Sin herramienta el stylus no mueve la vista (queda reservado para dibujar).
+        if (e.pointerCount == 1 && stylus && !drawTool) return false
+        if (!drawTool) gd.onTouchEvent(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 scroller.forceFinished(true)
@@ -346,9 +579,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 vel?.recycle()
                 vel = VelocityTracker.obtain()
                 vel?.addMovement(e)
+                if (drawTool) beginStroke(e, stylus)
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 if (e.pointerCount == 2) {
+                    cancelStroke() // un segundo dedo = gesto de vista, no trazo
                     mode = 2
                     multi = true
                     initTwo(e)
@@ -357,7 +592,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             MotionEvent.ACTION_MOVE -> {
                 vel?.addMovement(e)
                 if (mode == 2 && e.pointerCount >= 2) twoFinger(e)
-                else if (mode == 1) oneFinger(e)
+                else if (mode == 1) {
+                    if (penDown) drawMove(e, stylus) else oneFinger(e)
+                }
             }
             MotionEvent.ACTION_POINTER_UP -> {
                 if (e.pointerCount == 2) {
@@ -371,7 +608,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             MotionEvent.ACTION_UP -> {
                 vel?.addMovement(e)
                 vel?.computeCurrentVelocity(1000)
-                if (!multi) {
+                if (penDown) endStroke(e)
+                if (!multi && !drawTool) {
                     if (continuous) {
                         val b = contBounds()
                         scroller.fling(
@@ -393,6 +631,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 mode = 0
             }
             MotionEvent.ACTION_CANCEL -> {
+                if (penDown) cancelStroke()
                 vel?.recycle()
                 vel = null
                 mode = 0
