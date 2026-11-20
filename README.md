@@ -76,6 +76,12 @@ el ícono del launcher (color fijo).
 - Las flechas junto al contador ahora pasan a la hoja anterior / siguiente.
 - Pendiente: deshacer/rehacer, miniaturas con trazos en la biblioteca, resaltador.
 
+### v0.4.1 — marca texto
+- Nuevo ícono de marca texto y herramienta funcional: trazo de lápiz parcialmente transparente (alpha ≈ 45 %,
+  se ve lo de debajo) con grosor fino/mediano/grande (2,5 / 5 / 9 mm) y sus propios 4 colores
+  (toque largo = selector con círculo cromático, HEX y paleta guardada compartida con el lápiz).
+- El borrador también quita partes del marca texto. Datos: `pen` (`hl_*`); en el archivo de trazos es el tipo 3.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

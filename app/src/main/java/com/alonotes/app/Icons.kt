@@ -178,7 +178,13 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
                 poly(c, true, 4, 20, 5.5f, 14.5f, 15.5f, 4.5f, 19.5f, 8.5f, 9.5f, 18.5f)
                 ln(c, 13, 7, 17, 11)
             }
-            MARKER -> { poly(c, true, 5, 19, 5, 15, 15, 5, 19, 9, 9, 19); ln(c, 4, 21.5f, 11, 21.5f) }
+            MARKER -> {
+                // Marca texto: cuerpo inclinado, punta biselada y raya de apoyo.
+                poly(c, true, 8.5f, 14.5f, 15.5f, 4.5f, 19.5f, 7.5f, 12.5f, 17.5f)
+                poly(c, true, 8.5f, 14.5f, 12.5f, 17.5f, 6f, 19.5f)
+                ln(c, 12, 9.5f, 16, 12.5f)
+                ln(c, 3, 21.5f, 10, 21.5f)
+            }
             ERASER -> {
                 poly(c, true, 3.5f, 14.5f, 13, 5, 19.5f, 11.5f, 12, 19, 8, 19)
                 ln(c, 12, 19, 21, 19)

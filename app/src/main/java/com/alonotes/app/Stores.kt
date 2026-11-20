@@ -194,6 +194,31 @@ internal object PenStore {
         sp(c).edit().putString("colors", csv(a.toList())).apply()
     }
 
+    // Marca texto: su propio grosor y sus 4 colores (la paleta guardada se comparte con el lápiz).
+    private val DEFAULT_HL = intArrayOf(
+        0xFFFFEE58.toInt(), 0xFF69F0AE.toInt(), 0xFFFF80AB.toInt(), 0xFF6BFFF3.toInt()
+    )
+
+    fun hlWidth(c: Context): Int = sp(c).getInt("hl_width", 1).coerceIn(0, 2)
+    fun setHlWidth(c: Context, v: Int) = sp(c).edit().putInt("hl_width", v).apply()
+
+    /** Grosor del marca texto (mm de la hoja) según fino / mediano / grande. */
+    fun hlWidthMm(idx: Int): Float = floatArrayOf(2.5f, 5f, 9f)[idx.coerceIn(0, 2)]
+
+    fun hlColorIdx(c: Context): Int = sp(c).getInt("hl_color_idx", 0).coerceIn(0, 3)
+    fun setHlColorIdx(c: Context, v: Int) = sp(c).edit().putInt("hl_color_idx", v).apply()
+
+    fun hlColors(c: Context): IntArray {
+        val l = try { parse(sp(c).getString("hl_colors", "")) } catch (e: Exception) { emptyList() }
+        return if (l.size == 4) l.toIntArray() else DEFAULT_HL.copyOf()
+    }
+
+    fun setHlColor(c: Context, idx: Int, color: Int) {
+        val a = hlColors(c)
+        a[idx.coerceIn(0, 3)] = color or 0xFF000000.toInt()
+        sp(c).edit().putString("hl_colors", csv(a.toList())).apply()
+    }
+
     fun saved(c: Context): List<Int> =
         try { parse(sp(c).getString("saved", "")).take(MAX_SAVED) } catch (e: Exception) { emptyList() }
 

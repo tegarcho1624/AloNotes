@@ -62,6 +62,20 @@ internal object PenOptions {
         }
         bar.addView(divider(a))
 
+        colorGroup(a, bar, colors, sel, { i -> PenStore.setColorIdx(a, i) }, { i, c -> PenStore.setColor(a, i, c) }, rebuild)
+    }
+
+    private fun visible(c: Int): Int =
+        if (ColorUtils.calculateLuminance(c) < 0.12) 0xFFBDBDBD.toInt() else c
+
+    /** Cuatro colores: toque = elegir, toque largo = selector (círculo cromático, HEX, guardados). */
+    private fun colorGroup(
+        a: Activity, bar: LinearLayout, colors: IntArray, sel: Int,
+        onSelect: (Int) -> Unit, onSet: (Int, Int) -> Unit, rebuild: () -> Unit
+    ) {
+        fun dp(v: Number) = UiKit.dp(a, v)
+        val ink = a.getColor(R.color.ink)
+        val ln2 = a.getColor(R.color.ln2)
         val group = LinearLayout(a)
         group.gravity = Gravity.CENTER_VERTICAL
         for (i in 0..3) {
@@ -71,13 +85,13 @@ internal object PenOptions {
             sw.background = UiKit.oval(a, colors[i], if (i == sel) ink else ln2, if (i == sel) 2.5f else 1f)
             f.addView(sw, FrameLayout.LayoutParams(dp(size), dp(size), Gravity.CENTER))
             f.setOnClickListener {
-                PenStore.setColorIdx(a, i)
+                onSelect(i)
                 rebuild()
             }
             f.setOnLongClickListener {
-                PenStore.setColorIdx(a, i)
+                onSelect(i)
                 ColorPicker.show(a, group, colors[i], { c ->
-                    PenStore.setColor(a, i, c)
+                    onSet(i, c)
                     sw.background = UiKit.oval(a, c, ink, 2.5f)
                 }, { rebuild() })
                 true
@@ -85,6 +99,29 @@ internal object PenOptions {
             group.addView(f, LinearLayout.LayoutParams(dp(46), dp(44)))
         }
         bar.addView(group)
+    }
+
+    /** Opciones del marca texto: tres grosores (burbujas del color elegido) y sus 4 colores. */
+    fun buildHighlighter(a: Activity, bar: LinearLayout, rebuild: () -> Unit) {
+        fun dp(v: Number) = UiKit.dp(a, v)
+        val colors = PenStore.hlColors(a)
+        val sel = PenStore.hlColorIdx(a)
+        val wsel = PenStore.hlWidth(a)
+        val sizes = intArrayOf(14, 24, 36)
+        for (i in 0..2) {
+            val f = FrameLayout(a)
+            val c = View(a)
+            c.background = UiKit.oval(a, visible(colors[sel]), a.getColor(R.color.ink), if (i == wsel) 2.5f else 0f)
+            f.addView(c, FrameLayout.LayoutParams(dp(sizes[i]), dp(sizes[i]), Gravity.CENTER))
+            UiKit.ripple(a, f, 14, 0)
+            f.setOnClickListener {
+                PenStore.setHlWidth(a, i)
+                rebuild()
+            }
+            bar.addView(f, LinearLayout.LayoutParams(dp(54), dp(44)))
+        }
+        bar.addView(divider(a))
+        colorGroup(a, bar, colors, sel, { i -> PenStore.setHlColorIdx(a, i) }, { i, c -> PenStore.setHlColor(a, i, c) }, rebuild)
     }
 
     /** Opciones del borrador: tres tamaños (fino, normal, grande). */

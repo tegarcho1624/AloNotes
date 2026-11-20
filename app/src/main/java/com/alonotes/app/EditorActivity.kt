@@ -42,7 +42,7 @@ class EditorActivity : Activity() {
     private lateinit var counter: TextView
     private lateinit var bar: LinearLayout
     private lateinit var bgLayer: BackgroundLayer
-    private var tool = 0 // 0 ninguna, 1 lápiz, 2 borrador
+    private var tool = 0 // 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto
     private lateinit var strokes: DocStrokes
     private var total = 0
     private var themeVer = 0
@@ -153,11 +153,13 @@ class EditorActivity : Activity() {
         bar.addView(tb(Icons.GRID, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
         bar.addView(tb(Icons.PLUS, ink) { createPages() }, UiKit.box(this, 44))
         bar.addView(View(this), LinearLayout.LayoutParams(dp(22), 1))
-        // Lápiz (1) y borrador (2): se resaltan y muestran sus opciones; el resto, próximamente
+        // Lápiz (1), borrador (2) y marca texto (3): se resaltan y muestran sus opciones; el resto, próximamente
         val penBtn = tb(PenOptions.typeIcon(PenStore.type(this)), ink) { pickTool(1) }
         if (tool == 1 && !cont) UiKit.ripple(this, penBtn, 12, ThemeUtils.accentBg(this))
         bar.addView(penBtn, UiKit.box(this, 44))
-        bar.addView(tb(Icons.MARKER, ink) { editOnly { UiKit.soon(this) } }, UiKit.box(this, 44))
+        val markerBtn = tb(Icons.MARKER, ink) { pickTool(3) }
+        if (tool == 3 && !cont) UiKit.ripple(this, markerBtn, 12, ThemeUtils.accentBg(this))
+        bar.addView(markerBtn, UiKit.box(this, 44))
         val eraserBtn = tb(Icons.ERASER, ink) { pickTool(2) }
         if (tool == 2 && !cont) UiKit.ripple(this, eraserBtn, 12, ThemeUtils.accentBg(this))
         bar.addView(eraserBtn, UiKit.box(this, 44))
@@ -168,6 +170,8 @@ class EditorActivity : Activity() {
             PenOptions.build(this, bar) { buildBar() }
         } else if (tool == 2 && !cont) {
             PenOptions.buildEraser(this, bar) { buildBar() }
+        } else if (tool == 3 && !cont) {
+            PenOptions.buildHighlighter(this, bar) { buildBar() }
         } else {
             // Flechas de página: anterior / siguiente
             bar.addView(tb(Icons.UNDO, ink) { viewport.prevPage() }, UiKit.box(this, 44))

@@ -39,7 +39,7 @@ internal class FloatList {
 /**
  * Un trazo. Coordenadas en milímetros de la hoja (independientes del zoom y de la pantalla):
  * pts = x, y, presión(0..1) por punto. Inmutable una vez creado (el borrador crea trazos nuevos).
- * type: 0 lápiz | 1 pluma | 2 pincel.
+ * type: 0 lápiz | 1 pluma | 2 pincel | 3 marca texto.
  */
 internal class Stroke(val type: Int, val color: Int, val widthMm: Float, val pts: FloatArray) {
     val n: Int get() = pts.size / 3
@@ -116,13 +116,14 @@ internal object StrokeRender {
         if (s.n == 0) return
         var path = s.cache
         if (path == null || s.cacheScale != scale) {
-            path = if (s.type == 0) polyline(s, scale) else outline(s, scale)
+            path = if (s.type == 0 || s.type == 3) polyline(s, scale) else outline(s, scale)
             s.cache = path
             s.cacheScale = scale
         }
         paint.color = s.color
-        if (s.type == 0) {
-            paint.alpha = 235
+        if (s.type == 0 || s.type == 3) {
+            // 0 lápiz (casi opaco) | 3 marca texto (parcialmente transparente: se ve lo de abajo)
+            paint.alpha = if (s.type == 3) 115 else 235
             paint.style = Paint.Style.STROKE
             paint.strokeCap = Paint.Cap.ROUND
             paint.strokeJoin = Paint.Join.ROUND

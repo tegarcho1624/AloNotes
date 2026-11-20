@@ -41,7 +41,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         private set
     var onPage: (() -> Unit)? = null
 
-    /** 0 ninguna, 1 lápiz, 2 borrador (solo en la vista de una hoja). */
+    /** 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto (solo en la vista de una hoja). */
     var tool = 0
         set(v) {
             if (v != field) cancelStroke()
@@ -325,9 +325,15 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             eLY = pt[1]
             eraseTo(pt)
         } else {
-            penType = PenStore.type(context)
-            penColor = PenStore.colors(context)[PenStore.colorIdx(context)]
-            penW = PenStore.widthMm(PenStore.width(context))
+            if (tool == 3) {
+                penType = 3
+                penColor = PenStore.hlColors(context)[PenStore.hlColorIdx(context)]
+                penW = PenStore.hlWidthMm(PenStore.hlWidth(context))
+            } else {
+                penType = PenStore.type(context)
+                penColor = PenStore.colors(context)[PenStore.colorIdx(context)]
+                penW = PenStore.widthMm(PenStore.width(context))
+            }
             penK = 1f - (PenStore.smoothing(context) / 100f) * 0.9f
             live = null
             val sp = v.spec
