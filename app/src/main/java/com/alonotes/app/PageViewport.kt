@@ -574,9 +574,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (sc <= 0f) return null
         val pts = floatArrayOf(xMm * sc, yMm * sc)
         v.matrix.mapPoints(pts)
-        pts[0] += v.left
-        pts[1] += v.top
-        return pts
+        return floatArrayOf(pts[0] + v.left.toFloat(), pts[1] + v.top.toFloat())
     }
 
     /**
