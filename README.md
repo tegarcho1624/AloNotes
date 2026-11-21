@@ -107,6 +107,16 @@ el ícono del launcher (color fijo).
 - Barra derecha: se quitaron candado y flecha arriba; ahora es tablero, **mover/transformar** (`MOVE`), basura y más opciones.
 - Fila sobre la opacidad: solo flecha-a-línea y candado a la izquierda; sin texto "Normal" ni flecha desplegable.
 
+## Fase 7 — Capas reales, primera parte (v0.6.0)
+- Cada hoja tiene ahora **capas** (`Layer`: id, name, isVisible, opacity y canvas = sus trazos; `PageLayers` en `Strokes.kt`).
+  Siempre hay al menos una. Las capas viven en memoria mientras la nota está abierta.
+- **+** agrega una capa vacía justo encima de la seleccionada y la selecciona (máx. 30). **Basura** elimina la seleccionada
+  (pide confirmación si tiene trazos; la última capa no se puede eliminar). Tocar una fila la selecciona.
+- Se dibuja y se borra solo en la capa seleccionada. El render respeta `isVisible` y `opacity` (aún sin controles).
+- El número del ícono de capas y del panel minimizado muestra cuántas capas tiene la hoja.
+- **Guardado:** el formato `strokes/*.bin` **no cambió**: al guardar se juntan los trazos de todas las capas (de abajo hacia arriba).
+  Al volver a abrir la nota, cada hoja carga en una sola capa. Guardar capas por separado es la siguiente parte.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

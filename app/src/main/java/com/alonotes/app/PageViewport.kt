@@ -140,6 +140,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (continuous) scrollToIndex(index) else applyTransform()
     }
 
+    /** Vuelve a dibujar la hoja actual (por ejemplo, tras cambiar o eliminar una capa). */
+    fun refreshPage() {
+        single?.invalidate()
+    }
+
     fun prevPage() = goToPage(index - 1)
     fun nextPage() = goToPage(index + 1)
 
@@ -172,7 +177,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun pageAt(i: Int): PageView {
         val sp = specs[i]
-        return PageView(context, sp) { strokes?.page(i) ?: emptyList() }
+        return PageView(context, sp) { strokes?.page(i) }
     }
 
     private fun rebuild() {
@@ -422,14 +427,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val v = single
         v?.live = null
         if (l.size >= 3) {
-            strokes?.page(index)?.add(Stroke(penType, penColor, penW, l.toArray()))
+            strokes?.page(index)?.active?.add(Stroke(penType, penColor, penW, l.toArray()))
             onChanged?.invoke(index)
         }
         v?.invalidate()
     }
 
     private fun eraseTo(pt: FloatArray) {
-        val list = strokes?.page(index) ?: return
+        val list = strokes?.page(index)?.active ?: return
         val dx = pt[0] - eLX
         val dy = pt[1] - eLY
         val steps = max(1, ceil(hypot(dx, dy) / (eraserR * 0.5f)).toInt())

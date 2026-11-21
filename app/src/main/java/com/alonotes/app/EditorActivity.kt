@@ -98,7 +98,6 @@ class EditorActivity : Activity() {
 
         // Capas: ícono con número (por ahora solo hay una capa)
         layers = LayersView(this)
-        layers.count = 1
         layers.setOnClickListener {
             layersPanel.open()
             updateLayersUi()
@@ -109,8 +108,14 @@ class EditorActivity : Activity() {
 
         // Panel flotante de capas (arrastrable, expandido o minimizado)
         layersPanel = LayersPanel(this)
-        layersPanel.count = 1
         layersPanel.onClose = { updateLayersUi() }
+        layersPanel.onLayersChanged = { dirty ->
+            layers.count = layersPanel.layerCount
+            if (dirty) {
+                viewport.refreshPage()
+                StrokeStore.saveAsync(this, docId, strokes)
+            }
+        }
         if (b != null) layersPanel.restore(b)
         area.addView(layersPanel, FrameLayout.LayoutParams(dp(60), dp(60), Gravity.TOP or Gravity.START))
         area.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layersPanel.refit() }
@@ -272,6 +277,15 @@ class EditorActivity : Activity() {
 
     private fun updateCounter() {
         counter.text = if (total == 0) "0 / 0" else (viewport.index + 1).toString() + " / " + total
+        syncLayers()
+    }
+
+    /** Muestra en el panel (y en el ícono) las capas de la hoja actual. */
+    private fun syncLayers() {
+        if (!::layersPanel.isInitialized) return
+        val m = if (total > 0) strokes.page(viewport.index) else null
+        layersPanel.bind(m)
+        layers.count = layersPanel.layerCount
     }
 
     // ---------- Diálogo "Crear páginas nuevas" ----------

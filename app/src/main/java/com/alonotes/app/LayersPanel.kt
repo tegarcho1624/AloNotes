@@ -16,6 +16,7 @@ import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Toast
 import android.widget.SeekBar
 import kotlin.math.hypot
 
@@ -39,6 +40,10 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         private set
     var onClose: (() -> Unit)? = null
 
+    /** Se llama al agregar o eliminar una capa; el valor indica si cambiaron trazos (hay que redibujar y guardar). */
+    var onLayersChanged: ((Boolean) -> Unit)? = null
+    private var model: PageLayers? = null
+
     private val full = LinearLayout(a)
     private val mini = FrameLayout(a)
     private val badge = UiKit.text(a, "1", 24, ThemeUtils.accentHi(a))
@@ -50,13 +55,14 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     private var dRy = 0f
     private var dragged = false
 
-    /** Número de capas de la hoja actual (por ahora siempre 1). */
-    var count: Int = 1
-        set(v) {
-            field = v.coerceAtLeast(1)
-            badge.text = field.toString()
-            fillList()
-        }
+    /** Número de capas de la hoja actual. */
+    val layerCount: Int get() = model?.layers?.size ?: 1
+
+    /** Muestra las capas de la hoja actual (null si no hay hojas). */
+    fun bind(m: PageLayers?) {
+        model = m
+        fillList()
+    }
 
     private fun dp(v: Number) = UiKit.dp(a, v)
 
@@ -118,7 +124,14 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         val col = LinearLayout(a)
         col.orientation = LinearLayout.VERTICAL
         val ink = a.getColor(R.color.ink)
-        for (t in icons) col.addView(UiKit.iconBtn(a, t, ink, 40, 22) { UiKit.soon(a) }, UiKit.box(a, 40))
+        for (t in icons) {
+            val act: () -> Unit = when (t) {
+                Icons.PLUS -> this::addLayer
+                Icons.TRASH -> this::deleteLayer
+                else -> this::soon
+            }
+            col.addView(UiKit.iconBtn(a, t, ink, 40, 22, act), UiKit.box(a, 40))
+        }
         val sv = ScrollView(a)
         sv.isVerticalScrollBarEnabled = false
         sv.setBackgroundColor(a.getColor(R.color.sf))
@@ -184,13 +197,50 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         attachDrag(mini) { setMinimized(false) }
     }
 
+    private fun soon() = UiKit.soon(a)
+
     private fun fillList() {
         listBox.removeAllViews()
+        val m = model
+        badge.text = layerCount.toString()
+        if (m == null) return
         // La capa más alta arriba.
-        for (n in count downTo 1) listBox.addView(row(n, n == 1))
+        for (i in m.layers.indices.reversed()) {
+            listBox.addView(row(m.layers[i].name, i == m.selected) {
+                m.selected = i
+                fillList()
+            })
+        }
     }
 
-    private fun row(n: Int, selected: Boolean): View {
+    private fun addLayer() {
+        val m = model ?: return
+        if (!m.canAdd) {
+            Toast.makeText(a, "Máximo " + PageLayers.MAX + " capas", Toast.LENGTH_SHORT).show()
+            return
+        }
+        m.add()
+        fillList()
+        onLayersChanged?.invoke(false)
+    }
+
+    private fun deleteLayer() {
+        val m = model ?: return
+        if (m.layers.size <= 1) {
+            Toast.makeText(a, "Debe quedar al menos una capa", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val ly = m.layers[m.selected]
+        fun go() {
+            m.removeSelected()
+            fillList()
+            onLayersChanged?.invoke(true)
+        }
+        if (ly.canvas.isEmpty()) go()
+        else UiKit.confirm(a, "¿Eliminar «" + ly.name + "» y sus trazos?", "Eliminar") { go() }
+    }
+
+    private fun row(name: String, selected: Boolean, onSelect: () -> Unit): View {
         val ink = a.getColor(R.color.ink)
         val r = LinearLayout(a)
         r.gravity = Gravity.CENTER_VERTICAL
@@ -205,11 +255,12 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         r.addView(eye, ep)
         val tp = LinearLayout.LayoutParams(0, -2, 1f)
         tp.leftMargin = dp(4)
-        r.addView(UiKit.text(a, "Capa $n", 15, ink), tp)
+        r.addView(UiKit.text(a, name, 15, ink), tp)
         r.addView(UiKit.iconBtn(a, Icons.MENU, ink, 36, 20) { UiKit.soon(a) }, UiKit.box(a, 36))
         val lp = LinearLayout.LayoutParams(-1, dp(52))
         lp.bottomMargin = dp(4)
         r.layoutParams = lp
+        r.setOnClickListener { onSelect() }
         return r
     }
 

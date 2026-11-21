@@ -47,12 +47,71 @@ internal class Stroke(val type: Int, val color: Int, val widthMm: Float, val pts
     var cacheScale = 0f
 }
 
-/** Trazos de una nota: una lista por hoja. */
-internal class DocStrokes {
-    val pages = ArrayList<ArrayList<Stroke>>()
+/** Una capa de una hoja: sus trazos (canvas), visibilidad y opacidad. No usar equals/hashCode: se identifica por id. */
+internal data class Layer(
+    val id: Long,
+    var name: String,
+    var isVisible: Boolean = true,
+    var opacity: Float = 1f,
+    val canvas: ArrayList<Stroke> = ArrayList()
+)
 
-    fun page(i: Int): ArrayList<Stroke> {
-        while (pages.size <= i) pages.add(ArrayList())
+/** Capas de una hoja (la primera es la de abajo) y cuál está seleccionada. Siempre hay al menos una. */
+internal class PageLayers(first: List<Stroke>? = null) {
+    companion object {
+        const val MAX = 30
+    }
+
+    val layers = ArrayList<Layer>()
+    private var seq = 1
+
+    var selected = 0
+        set(v) {
+            field = v.coerceIn(0, layers.size - 1)
+        }
+
+    init {
+        val l = Layer(1L, "Capa 1")
+        if (first != null) l.canvas.addAll(first)
+        layers.add(l)
+    }
+
+    /** Trazos de la capa seleccionada: ahí se dibuja y se borra. */
+    val active: ArrayList<Stroke> get() = layers[selected].canvas
+
+    val canAdd: Boolean get() = layers.size < MAX
+
+    /** Agrega una capa vacía justo encima de la seleccionada y la selecciona. */
+    fun add(): Layer {
+        seq++
+        val l = Layer(seq.toLong(), "Capa $seq")
+        layers.add(selected + 1, l)
+        selected += 1
+        return l
+    }
+
+    /** Elimina la capa seleccionada. La última capa no se puede eliminar. */
+    fun removeSelected(): Boolean {
+        if (layers.size <= 1) return false
+        layers.removeAt(selected)
+        selected = min(selected, layers.size - 1)
+        return true
+    }
+
+    /** Todos los trazos en orden (de abajo hacia arriba): así se guarda hasta que las capas se guarden por separado. */
+    fun flatten(): ArrayList<Stroke> {
+        val out = ArrayList<Stroke>()
+        for (l in layers) out.addAll(l.canvas)
+        return out
+    }
+}
+
+/** Trazos de una nota: capas por hoja. */
+internal class DocStrokes {
+    val pages = ArrayList<PageLayers>()
+
+    fun page(i: Int): PageLayers {
+        while (pages.size <= i) pages.add(PageLayers())
         return pages[i]
     }
 }
@@ -225,7 +284,7 @@ internal object StrokeStore {
                         }
                         if (n > 0) page.add(Stroke(t, col, w, pts))
                     }
-                    doc.pages.add(page)
+                    doc.pages.add(PageLayers(page))
                 }
             }
         } catch (e: Exception) {
@@ -235,7 +294,7 @@ internal object StrokeStore {
     }
 
     fun saveAsync(c: Context, id: String, doc: DocStrokes) {
-        val snap = doc.pages.map { ArrayList(it) } // copia superficial: Stroke es inmutable
+        val snap = doc.pages.map { it.flatten() } // copia superficial: Stroke es inmutable
         val app = c.applicationContext
         exec.execute { write(app, id, snap) }
     }
@@ -282,7 +341,7 @@ internal object StrokeStore {
 }
 
 /** Una hoja: dibuja su fondo, sus trazos guardados, el trazo en curso y el cursor del borrador. */
-internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val list: () -> List<Stroke>) : View(ctx) {
+internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val page: () -> PageLayers?) : View(ctx) {
     var live: Stroke? = null
     private var cx = 0f
     private var cy = 0f
@@ -318,8 +377,18 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val l
         bg.color = spec.bg
         rect.set(0f, 0f, width.toFloat(), height.toFloat())
         c.drawRect(rect, bg)
-        for (s in list()) StrokeRender.draw(c, s, scale, pen)
-        live?.let { StrokeRender.draw(c, it, scale, pen) }
+        val pl = page()
+        if (pl != null) {
+            for ((i, ly) in pl.layers.withIndex()) {
+                if (!ly.isVisible) continue
+                val a = (ly.opacity.coerceIn(0f, 1f) * 255f).roundToInt()
+                val sc = if (a < 255) c.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), a) else -1
+                for (s in ly.canvas) StrokeRender.draw(c, s, scale, pen)
+                // El trazo en curso pertenece a la capa seleccionada.
+                if (i == pl.selected) live?.let { StrokeRender.draw(c, it, scale, pen) }
+                if (sc >= 0) c.restoreToCount(sc)
+            }
+        }
         if (cr > 0f) c.drawCircle(cx * scale, cy * scale, cr * scale, cursor)
     }
 }
