@@ -102,6 +102,11 @@ el ícono del launcher (color fijo).
 - **Todos los botones nuevos muestran "Próximamente"** (`UiKit.soon`); no hay lógica real de capas todavía.
 - Íconos nuevos en `Icons.kt`: `COPY`, `ARROW_DOWN`, `ARROW_UP`, `ARROW_DOWN_LINE`, `CHECKER` y `DOTS_V`. Se usan colores existentes.
 
+## Ajustes de diseño del panel de capas (v0.5.2)
+- Duplicar lleva un pequeño **+** en la esquina superior derecha (ícono `COPY_PLUS`).
+- Barra derecha: se quitaron candado y flecha arriba; ahora es tablero, **mover/transformar** (`MOVE`), basura y más opciones.
+- Fila sobre la opacidad: solo flecha-a-línea y candado a la izquierda; sin texto "Normal" ni flecha desplegable.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

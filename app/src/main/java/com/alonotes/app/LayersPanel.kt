@@ -14,7 +14,6 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -97,12 +96,12 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         // Cuerpo: barra izquierda | columna central | barra derecha
         val body = LinearLayout(a)
         body.orientation = LinearLayout.HORIZONTAL
-        body.addView(sideBar(intArrayOf(Icons.PLUS, Icons.COPY, Icons.ARROW_DOWN)), LinearLayout.LayoutParams(dp(40), -1))
+        body.addView(sideBar(intArrayOf(Icons.PLUS, Icons.COPY_PLUS, Icons.ARROW_DOWN)), LinearLayout.LayoutParams(dp(40), -1))
         body.addView(vline(), LinearLayout.LayoutParams(dp(1), -1))
         body.addView(buildCenter(), LinearLayout.LayoutParams(0, -1, 1f))
         body.addView(vline(), LinearLayout.LayoutParams(dp(1), -1))
         body.addView(
-            sideBar(intArrayOf(Icons.CHECKER, Icons.LOCK, Icons.ARROW_UP, Icons.TRASH, Icons.DOTS_V)),
+            sideBar(intArrayOf(Icons.CHECKER, Icons.MOVE, Icons.TRASH, Icons.DOTS_V)),
             LinearLayout.LayoutParams(dp(40), -1)
         )
         full.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
@@ -149,16 +148,6 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         blend.setPadding(dp(4), 0, dp(8), 0)
         blend.addView(UiKit.iconBtn(a, Icons.ARROW_DOWN_LINE, ink, 36, 20) { UiKit.soon(a) }, UiKit.box(a, 36))
         blend.addView(UiKit.iconBtn(a, Icons.LOCK, ink, 36, 16) { UiKit.soon(a) }, UiKit.box(a, 36))
-        val mode = LinearLayout(a)
-        mode.gravity = Gravity.CENTER_VERTICAL
-        mode.setPadding(dp(10), 0, dp(6), 0)
-        UiKit.ripple(a, mode, 10, 0)
-        mode.addView(UiKit.text(a, "Normal", 14, ink), LinearLayout.LayoutParams(0, -2, 1f))
-        mode.addView(ImageView(a).also { it.setImageDrawable(Icons(Icons.CHEV, a.getColor(R.color.mut), false)) }, UiKit.box(a, 18))
-        mode.setOnClickListener { UiKit.soon(a) }
-        val mp = LinearLayout.LayoutParams(0, dp(34), 1f)
-        mp.leftMargin = dp(4)
-        blend.addView(mode, mp)
         center.addView(blend, LinearLayout.LayoutParams(-1, dp(42)))
 
         // Opacidad (solo visual por ahora)

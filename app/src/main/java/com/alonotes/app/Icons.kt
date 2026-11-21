@@ -63,6 +63,8 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val ARROW_DOWN_LINE = 46
         const val CHECKER = 47
         const val DOTS_V = 48
+        const val COPY_PLUS = 49
+        const val MOVE = 50
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -315,6 +317,16 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
             MINIMIZE -> { rr(c, 4, 4, 20, 20, 3); ln(c, 8, 15, 16, 15) }
             GRIP -> ln(c, 6, 12, 18, 12)
             COPY -> { rr(c, 9, 9, 20, 20, 2); poly(c, false, 15, 9, 15, 5, 5, 5, 5, 15, 9, 15) }
+            COPY_PLUS -> {
+                rr(c, 8, 10, 18, 20, 2)
+                poly(c, false, 13, 10, 13, 6, 4, 6, 4, 16, 8, 16)
+                ln(c, 19, 3.5f, 19, 8.5f); ln(c, 16.5f, 6, 21.5f, 6)
+            }
+            MOVE -> {
+                ln(c, 12, 3, 12, 21); ln(c, 3, 12, 21, 12)
+                poly(c, false, 9, 6, 12, 3, 15, 6); poly(c, false, 9, 18, 12, 21, 15, 18)
+                poly(c, false, 6, 9, 3, 12, 6, 15); poly(c, false, 18, 9, 21, 12, 18, 15)
+            }
             ARROW_DOWN -> { ln(c, 12, 5, 12, 19); poly(c, false, 6, 13, 12, 19, 18, 13) }
             ARROW_UP -> { ln(c, 12, 19, 12, 5); poly(c, false, 6, 11, 12, 5, 18, 11) }
             ARROW_DOWN_LINE -> { ln(c, 12, 4, 12, 15); poly(c, false, 7, 10, 12, 15, 17, 10); ln(c, 5, 20, 19, 20) }
