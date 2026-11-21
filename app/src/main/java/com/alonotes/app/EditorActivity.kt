@@ -109,6 +109,7 @@ class EditorActivity : Activity() {
         // Panel flotante de capas (arrastrable, expandido o minimizado)
         layersPanel = LayersPanel(this)
         layersPanel.onClose = { updateLayersUi() }
+        layersPanel.onVisibilityChanged = { viewport.refreshPage() }
         layersPanel.onLayersChanged = { dirty ->
             layers.count = layersPanel.layerCount
             if (dirty) {

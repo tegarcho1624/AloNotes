@@ -117,6 +117,11 @@ el ícono del launcher (color fijo).
 - **Guardado:** el formato `strokes/*.bin` **no cambió**: al guardar se juntan los trazos de todas las capas (de abajo hacia arriba).
   Al volver a abrir la nota, cada hoja carga en una sola capa. Guardar capas por separado es la siguiente parte.
 
+## Fase 7b — Ojo de capa (v0.6.1)
+- El ojo de cada capa **alterna `isVisible`**: visible = ojo en acento; oculta = ojo tachado (`EYE_OFF`) y nombre en gris.
+  El dibujo de la hoja salta las capas ocultas. No se puede dibujar ni borrar en una capa oculta (avisa con un aviso).
+- La visibilidad **aún no se guarda**: al reabrir la nota todo vuelve a verse (los trazos ocultos siguen guardados).
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

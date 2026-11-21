@@ -11,6 +11,7 @@ import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.OverScroller
+import android.widget.Toast
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ceil
@@ -317,6 +318,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (!stylus && e.eventTime - lastStylusT < 1500) return
         val v = single ?: return
         val pt = toPage(e.x, e.y) ?: return
+        // No se dibuja ni se borra en una capa oculta (no se vería lo que pasa).
+        val pl = strokes?.page(index)
+        if (pl != null && !pl.layers[pl.selected].isVisible) {
+            Toast.makeText(context, "La capa está oculta", Toast.LENGTH_SHORT).show()
+            return
+        }
         penDown = true
         lastX = pt[0]
         lastY = pt[1]

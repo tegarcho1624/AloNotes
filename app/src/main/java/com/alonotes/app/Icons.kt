@@ -65,6 +65,7 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val DOTS_V = 48
         const val COPY_PLUS = 49
         const val MOVE = 50
+        const val EYE_OFF = 51
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -321,6 +322,12 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
                 rr(c, 8, 10, 18, 20, 2)
                 poly(c, false, 13, 10, 13, 6, 4, 6, 4, 16, 8, 16)
                 ln(c, 19, 3.5f, 19, 8.5f); ln(c, 16.5f, 6, 21.5f, 6)
+            }
+            EYE_OFF -> {
+                // Ojo de contorno tachado: capa oculta.
+                almond(c)
+                circ(c, 12, 12, 3.6f)
+                ln(c, 4, 20, 20, 4)
             }
             MOVE -> {
                 ln(c, 12, 3, 12, 21); ln(c, 3, 12, 21, 12)

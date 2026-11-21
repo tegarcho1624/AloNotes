@@ -44,6 +44,9 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     var onLayersChanged: ((Boolean) -> Unit)? = null
     private var model: PageLayers? = null
 
+    /** Se llama al mostrar u ocultar una capa (solo hay que redibujar la hoja). */
+    var onVisibilityChanged: (() -> Unit)? = null
+
     private val full = LinearLayout(a)
     private val mini = FrameLayout(a)
     private val badge = UiKit.text(a, "1", 24, ThemeUtils.accentHi(a))
@@ -206,7 +209,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         if (m == null) return
         // La capa más alta arriba.
         for (i in m.layers.indices.reversed()) {
-            listBox.addView(row(m.layers[i].name, i == m.selected) {
+            listBox.addView(row(m.layers[i], i == m.selected) {
                 m.selected = i
                 fillList()
             })
@@ -240,7 +243,13 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         else UiKit.confirm(a, "¿Eliminar «" + ly.name + "» y sus trazos?", "Eliminar") { go() }
     }
 
-    private fun row(name: String, selected: Boolean, onSelect: () -> Unit): View {
+    private fun toggleVisible(ly: Layer) {
+        ly.isVisible = !ly.isVisible
+        fillList()
+        onVisibilityChanged?.invoke()
+    }
+
+    private fun row(ly: Layer, selected: Boolean, onSelect: () -> Unit): View {
         val ink = a.getColor(R.color.ink)
         val r = LinearLayout(a)
         r.gravity = Gravity.CENTER_VERTICAL
@@ -249,13 +258,15 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         else UiKit.ripple(a, r, 10, 0)
         // Miniatura con fondo de tablero (transparencia)
         r.addView(Checker(a), UiKit.box(a, 32))
-        val eye = UiKit.iconBtn(a, Icons.EYE, ThemeUtils.accentHi(a), 36, 22) { UiKit.soon(a) }
+        // Ojo: alterna la visibilidad de la capa (apagado y gris cuando está oculta).
+        val eye = if (ly.isVisible) UiKit.iconBtn(a, Icons.EYE, ThemeUtils.accentHi(a), 36, 22) { toggleVisible(ly) }
+        else UiKit.iconBtn(a, Icons.EYE_OFF, a.getColor(R.color.mut), 36, 22) { toggleVisible(ly) }
         val ep = UiKit.box(a, 36)
         ep.leftMargin = dp(4)
         r.addView(eye, ep)
         val tp = LinearLayout.LayoutParams(0, -2, 1f)
         tp.leftMargin = dp(4)
-        r.addView(UiKit.text(a, name, 15, ink), tp)
+        r.addView(UiKit.text(a, ly.name, 15, if (ly.isVisible) ink else a.getColor(R.color.mut)), tp)
         r.addView(UiKit.iconBtn(a, Icons.MENU, ink, 36, 20) { UiKit.soon(a) }, UiKit.box(a, 36))
         val lp = LinearLayout.LayoutParams(-1, dp(52))
         lp.bottomMargin = dp(4)
