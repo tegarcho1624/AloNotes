@@ -212,6 +212,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             listBox.addView(row(m.layers[i], i == m.selected) {
                 m.selected = i
                 fillList()
+                onLayersChanged?.invoke(false)
             })
         }
     }

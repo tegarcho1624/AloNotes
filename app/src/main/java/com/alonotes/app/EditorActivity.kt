@@ -81,8 +81,12 @@ class EditorActivity : Activity() {
         viewport.restore(b?.getBoolean("cont") ?: false, b?.getInt("page") ?: 0)
         viewport.onPage = { updateCounter() }
         strokes = StrokeStore.load(this, docId)
+        LayerRepository.applyTo(this, docId, strokes)
         viewport.strokes = strokes
-        viewport.onChanged = { StrokeStore.saveAsync(this, docId, strokes) }
+        viewport.onChanged = {
+            persistStrokes()
+            persistLayers()
+        }
         area.addView(viewport, FrameLayout.LayoutParams(-1, -1))
 
         emptyView = LinearLayout(this)
@@ -109,13 +113,17 @@ class EditorActivity : Activity() {
         // Panel flotante de capas (arrastrable, expandido o minimizado)
         layersPanel = LayersPanel(this)
         layersPanel.onClose = { updateLayersUi() }
-        layersPanel.onVisibilityChanged = { viewport.refreshPage() }
+        layersPanel.onVisibilityChanged = {
+            viewport.refreshPage()
+            persistLayers()
+        }
         layersPanel.onLayersChanged = { dirty ->
             layers.count = layersPanel.layerCount
             if (dirty) {
                 viewport.refreshPage()
-                StrokeStore.saveAsync(this, docId, strokes)
+                persistStrokes()
             }
+            persistLayers()
         }
         if (b != null) layersPanel.restore(b)
         area.addView(layersPanel, FrameLayout.LayoutParams(dp(60), dp(60), Gravity.TOP or Gravity.START))
@@ -280,6 +288,10 @@ class EditorActivity : Activity() {
         counter.text = if (total == 0) "0 / 0" else (viewport.index + 1).toString() + " / " + total
         syncLayers()
     }
+
+    private fun persistStrokes() = StrokeStore.saveAsync(this, docId, strokes)
+
+    private fun persistLayers() = LayerRepository.saveLayers(this, docId, strokes)
 
     /** Muestra en el panel (y en el ícono) las capas de la hoja actual. */
     private fun syncLayers() {

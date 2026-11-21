@@ -122,6 +122,15 @@ el ícono del launcher (color fijo).
   El dibujo de la hoja salta las capas ocultas. No se puede dibujar ni borrar en una capa oculta (avisa con un aviso).
 - La visibilidad **aún no se guarda**: al reabrir la nota todo vuelve a verse (los trazos ocultos siguen guardados).
 
+## Fase 8 — Guardado de la estructura de capas (v0.7.0)
+- `LayerRepository.kt` guarda `filesDir/layers/<idNota>.json` con kotlinx.serialization: por hoja, cada capa (nombre, orden,
+  visibilidad, opacidad), cuál está seleccionada y **cuántos trazos tiene**. Se guarda al agregar, eliminar, mostrar/ocultar,
+  seleccionar y al dibujar o borrar; se carga en `onCreate` justo después de los trazos.
+- `strokes/<id>.bin` **no cambió**: sigue guardando todos los trazos juntos (abajo → arriba). Con el conteo por capa, al abrir cada
+  trazo vuelve a su capa. Si los datos no cuadran (archivo dañado o a medias), todo cae en la primera capa y se conserva la estructura.
+- `Layer` ahora es `@Serializable` (su `canvas` es `@Transient`). Gradle: plugin `org.jetbrains.kotlin.plugin.serialization`
+  1.9.24 y `kotlinx-serialization-json:1.6.3`. Al eliminar una nota también se borra su archivo de capas.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

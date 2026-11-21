@@ -15,6 +15,8 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -48,12 +50,14 @@ internal class Stroke(val type: Int, val color: Int, val widthMm: Float, val pts
 }
 
 /** Una capa de una hoja: sus trazos (canvas), visibilidad y opacidad. No usar equals/hashCode: se identifica por id. */
+@Serializable
 internal data class Layer(
     val id: Long,
     var name: String,
     var isVisible: Boolean = true,
     var opacity: Float = 1f,
-    val canvas: ArrayList<Stroke> = ArrayList()
+    // Los trazos no se serializan aquí: van en strokes/<id>.bin.
+    @Transient val canvas: ArrayList<Stroke> = ArrayList()
 )
 
 /** Capas de una hoja (la primera es la de abajo) y cuál está seleccionada. Siempre hay al menos una. */
@@ -96,6 +100,29 @@ internal class PageLayers(first: List<Stroke>? = null) {
         layers.removeAt(selected)
         selected = min(selected, layers.size - 1)
         return true
+    }
+
+    /**
+     * Restaura las capas guardadas (sin trazos) y reparte entre ellas los trazos cargados, usando cuántos
+     * tenía cada una. Si los números no cuadran con los trazos cargados, todos quedan en la primera capa.
+     */
+    fun restore(saved: List<Layer>, sel: Int, counts: List<Int>) {
+        if (saved.isEmpty() || saved.size > MAX) return
+        val flat = flatten()
+        val ok = counts.size == saved.size && counts.all { it >= 0 } && counts.sum() == flat.size
+        var pos = 0
+        for ((i, l) in saved.withIndex()) {
+            l.canvas.clear()
+            val n = if (ok) counts[i] else if (i == 0) flat.size else 0
+            for (k in 0 until n) l.canvas.add(flat[pos + k])
+            pos += n
+        }
+        layers.clear()
+        layers.addAll(saved)
+        var top = layers.size
+        for (l in layers) if (l.id > top) top = l.id.toInt()
+        seq = top
+        selected = sel
     }
 
     /** Todos los trazos en orden (de abajo hacia arriba): así se guarda hasta que las capas se guarden por separado. */
