@@ -183,6 +183,17 @@ el ícono del launcher (color fijo).
   aparece solo con un elemento seleccionado, a la izquierda del recuadro, y lo acompaña al mover, girar, redimensionar,
   hacer zoom o desplazar la hoja.)
 
+## Fase 12 — Gestor de páginas (v0.11.0)
+- El ícono de cuadrícula del editor abre `PageManagerActivity` (nueva, registrada en el manifiesto): cuadrícula (`GridLayoutManager`)
+  con la miniatura de cada hoja y "Page N". Atrás a la izquierda y **EDIT** a la derecha.
+- **Edición:** Atrás sale del modo; Deshacer/Rehacer, Seleccionar todo, Copiar y Basura muestran "Próximamente". Tocar una hoja la marca
+  (borde de acento, capa translúcida y una marca) o la desmarca. Fuera de la edición, tocar una hoja vuelve al editor en esa hoja.
+- **Arrastrar y soltar:** toque largo + arrastrar (`ItemTouchHelper`) reordena. Se guarda: `NoteStore.movePage` (hojas) y se reordenan los
+  trazos y las capas. El editor se recarga al volver (`recreate`). Si se suelta sin mover, aparece el menú (Copiar/Borrar hoja o seleccionadas,
+  Pegar adelante/atrás) que por ahora solo muestra avisos.
+- Las miniaturas se dibujan en segundo plano (fondo, imágenes y trazos de las capas visibles). `StrokeStore.flush()` y `LayerRepository.flush()`
+  esperan a las escrituras pendientes antes de leer.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

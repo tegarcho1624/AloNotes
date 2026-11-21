@@ -28,6 +28,7 @@ import java.util.UUID
 class EditorActivity : Activity() {
     private companion object {
         const val REQ_IMAGE = 41
+        const val REQ_PAGES = 42
         val DIMS = arrayOf("A5", "A4", "A3", "A2")
         val DIM_LABELS = arrayOf("A5 (148 x 210 mm)", "A4 (210 x 297 mm)", "A3 (297 x 420 mm)", "A2 (420 x 594 mm)")
         val MM = arrayOf(
@@ -48,6 +49,7 @@ class EditorActivity : Activity() {
     private lateinit var counter: TextView
     private lateinit var bar: LinearLayout
     private lateinit var bgLayer: BackgroundLayer
+    private var pendingPage = -1 // hoja a mostrar al recargar el editor tras el gestor de páginas
     private var tool = 0 // 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar
     private lateinit var strokes: DocStrokes
     private var total = 0
@@ -157,7 +159,7 @@ class EditorActivity : Activity() {
         super.onSaveInstanceState(o)
         if (::viewport.isInitialized) {
             o.putBoolean("cont", viewport.continuous)
-            o.putInt("page", viewport.index)
+            o.putInt("page", if (pendingPage >= 0) pendingPage else viewport.index)
         }
         if (::layersPanel.isInitialized) layersPanel.save(o)
     }
@@ -184,7 +186,7 @@ class EditorActivity : Activity() {
         val cont = viewport.continuous
         bar.removeAllViews()
         bar.addView(tb(Icons.BACK, ink) { finish() }, UiKit.box(this, 44))
-        bar.addView(tb(Icons.GRID, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+        bar.addView(tb(Icons.GRID, ink) { openPages() }, UiKit.box(this, 44))
         bar.addView(tb(Icons.PLUS, ink) { createPages() }, UiKit.box(this, 44))
         bar.addView(View(this), LinearLayout.LayoutParams(dp(22), 1))
         // Lápiz (1), borrador (2) y marca texto (3): se resaltan y muestran sus opciones; el resto, próximamente
@@ -237,6 +239,33 @@ class EditorActivity : Activity() {
         bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
     }
 
+    // ---------- Gestor de páginas ----------
+
+    private fun openPages() {
+        if (total == 0) {
+            Toast.makeText(this, "Primero crea una página", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // Lo último que se dibujó o se movió ya se está guardando; el gestor espera a que termine antes de leer.
+        val i = Intent(this, PageManagerActivity::class.java)
+        i.putExtra("id", docId)
+        i.putExtra("page", viewport.index)
+        @Suppress("DEPRECATION")
+        startActivityForResult(i, REQ_PAGES)
+    }
+
+    /** Vuelve del gestor: si se reordenaron hojas, se recarga el editor desde los archivos; si no, solo se cambia de hoja. */
+    private fun onPagesResult(changed: Boolean, page: Int) {
+        if (changed) {
+            StrokeStore.flush()
+            LayerRepository.flush()
+            pendingPage = if (page >= 0) page else viewport.index
+            recreate()
+        } else if (page >= 0) {
+            viewport.goToPage(page)
+        }
+    }
+
     // ---------- Imágenes ----------
 
     /** Abre la galería (mismo mecanismo que Ajustes: el proyecto usa Activity simple, sin androidx.activity). */
@@ -260,6 +289,12 @@ class EditorActivity : Activity() {
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
         super.onActivityResult(req, res, data)
+        if (req == REQ_PAGES) {
+            if (res == RESULT_OK && data != null) {
+                onPagesResult(data.getBooleanExtra("changed", false), data.getIntExtra("page", -1))
+            }
+            return
+        }
         val uri = data?.data
         if (req != REQ_IMAGE || res != RESULT_OK || uri == null) return
         Toast.makeText(this, "Insertando imagen…", Toast.LENGTH_SHORT).show()

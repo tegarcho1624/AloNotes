@@ -303,6 +303,15 @@ internal object StrokeStore {
 
     private fun file(c: Context, id: String) = File(File(c.filesDir, "strokes"), "$id.bin")
 
+    /** Espera a que terminen las escrituras pendientes (para leer justo después, desde otra pantalla). */
+    fun flush() {
+        try {
+            exec.submit(Runnable { }).get()
+        } catch (ignored: Exception) {
+            // Si se interrumpe, se sigue igual.
+        }
+    }
+
     fun load(c: Context, id: String): DocStrokes {
         val doc = DocStrokes()
         val f = file(c, id)

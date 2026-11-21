@@ -51,6 +51,15 @@ internal object LayerRepository {
 
     private fun file(c: Context, id: String) = File(File(c.filesDir, "layers"), "$id.json")
 
+    /** Espera a que terminen las escrituras pendientes (para leer justo después, desde otra pantalla). */
+    fun flush() {
+        try {
+            exec.submit(Runnable { }).get()
+        } catch (ignored: Exception) {
+            // Si se interrumpe, se sigue igual.
+        }
+    }
+
     /** Lee el archivo. Si no existe o está dañado devuelve lista vacía (cada hoja queda con su capa por defecto). */
     fun loadLayers(c: Context, id: String): List<PageState> {
         val f = file(c, id)

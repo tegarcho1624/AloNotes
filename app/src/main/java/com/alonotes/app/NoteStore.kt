@@ -234,6 +234,23 @@ internal object NoteStore {
     }
 
     @Synchronized
+    /** Mueve una hoja de la posición [from] a [to] (0 = la primera). Los trazos y capas se reordenan aparte. */
+    @Synchronized
+    fun movePage(c: Context, id: String, from: Int, to: Int) {
+        val all = load(c)
+        val doc = all.firstOrNull { it.id == id } ?: return
+        val n = doc.pages.length()
+        if (from !in 0 until n || to !in 0 until n || from == to) return
+        val l = ArrayList<Any?>()
+        for (i in 0 until n) l.add(doc.pages.opt(i))
+        l.add(to, l.removeAt(from))
+        val arr = JSONArray()
+        for (x in l) arr.put(x)
+        doc.pages = arr
+        doc.t = System.currentTimeMillis()
+        save(c, all)
+    }
+
     fun addPages(c: Context, id: String, n: Int, dim: String, landscape: Boolean, bg: Int) {
         val all = load(c)
         for (item in all) {
