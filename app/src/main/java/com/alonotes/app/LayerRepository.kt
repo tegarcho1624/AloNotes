@@ -11,7 +11,22 @@ import kotlinx.serialization.json.Json
 internal class PageState(
     val selected: Int = 0,
     val layers: List<Layer> = emptyList(),
-    val counts: List<Int> = emptyList()
+    val counts: List<Int> = emptyList(),
+    /** Imágenes de cada capa (misma posición que [layers]). */
+    val images: List<List<ImageDto>> = emptyList()
+)
+
+/** Imagen guardada: archivo (en images/<idNota>/), rectángulo sin rotar en mm de la hoja, rotación y ancho original. */
+@Serializable
+internal class ImageDto(
+    val id: String,
+    val file: String,
+    val l: Float,
+    val t: Float,
+    val r: Float,
+    val b: Float,
+    val rot: Float = 0f,
+    val bw: Float = 0f
 )
 
 /** Archivo de capas de una nota (una entrada por hoja). */
@@ -51,7 +66,7 @@ internal object LayerRepository {
     fun applyTo(c: Context, id: String, doc: DocStrokes) {
         for ((i, ps) in loadLayers(c, id).withIndex()) {
             if (i >= 5000) break
-            doc.page(i).restore(ps.layers, ps.selected, ps.counts)
+            doc.page(i).restore(ps.layers, ps.selected, ps.counts, ps.images, File(c.filesDir, "images/" + id))
         }
     }
 
@@ -59,7 +74,12 @@ internal object LayerRepository {
     fun saveLayers(c: Context, id: String, doc: DocStrokes) {
         val text = try {
             val pages = doc.pages.map { pl ->
-                PageState(pl.selected, ArrayList(pl.layers), pl.layers.map { it.canvas.size })
+                PageState(
+                    pl.selected, ArrayList(pl.layers), pl.layers.map { it.canvas.size },
+                    pl.layers.map { ly ->
+                        ly.items.map { ImageDto(it.id, it.file.name, it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom, it.rotation, it.baseW) }
+                    }
+                )
             }
             json.encodeToString(DocState.serializer(), DocState(1, pages))
         } catch (e: Exception) {

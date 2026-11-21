@@ -167,6 +167,20 @@ el ícono del launcher (color fijo).
 - Al soltar se guarda el orden (`CategoryStore.reorder`, que además fuerza la por defecto primero). La fila arrastrada se muestra levantada (sombra).
 - No cambia: modos de vista, favoritos, capas ni trazos.
 
+## Fase 11 — Imágenes y herramienta Seleccionar (v0.10.0)
+- **Imágenes** (barra superior): abre la galería (`ACTION_OPEN_DOCUMENT`, como Ajustes). La imagen se copia reducida (máx. 2048 px, EXIF) a
+  `filesDir/images/<idNota>/` y se coloca al centro de la hoja (60 % de la hoja), **dentro de la capa seleccionada** (`Layer.items`).
+  Al insertarla se activa la herramienta **Seleccionar** (tool 4), que también está en su botón de la barra.
+- **Modelo modular:** `SelectableItem` (`bounds` sin rotar en mm, `rotation`, `scale`, `draw`, `hit`) en `Selectables.kt`; `ImageItem` lo implementa.
+  Textos y trazos podrán implementarlo después. `Xf` reúne la geometría (rotar, local↔hoja, ángulo con `atan2`, redimensionar).
+- **Recuadro:** contorno, 8 tiradores (esquinas y bordes) y círculo de giro arriba, dibujados en pantalla (`PageViewport.dispatchDraw`),
+  así se ven aunque la imagen salga de la hoja. Tocar el centro arrastra; un tirador redimensiona (esquinas con proporción fija: proyección
+  del puntero sobre la diagonal; bordes: solo ancho o alto; el punto opuesto no se mueve); el círculo gira (`atan2` del puntero respecto al centro).
+- **Recorte:** al dibujar la hoja (`PageView`), las imágenes se recortan con `clipRect` a los límites de la hoja; van debajo de los trazos de su capa
+  y respetan visibilidad y opacidad de la capa.
+- **Guardado:** `layers/<idNota>.json` guarda por capa sus imágenes (archivo, rectángulo, rotación). Se borran con la nota.
+- El menú de 3 puntos de la barra de selección muestra "Próximamente".
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

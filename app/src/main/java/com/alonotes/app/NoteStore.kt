@@ -3,6 +3,7 @@ package com.alonotes.app
 import android.content.Context
 import android.content.SharedPreferences
 import org.json.JSONArray
+import java.io.File
 import org.json.JSONObject
 import java.util.UUID
 
@@ -222,6 +223,11 @@ internal object NoteStore {
             FolderIconStore.remove(c, g)
             StrokeStore.delete(c, g)
             LayerRepository.delete(c, g)
+            try {
+                File(c.filesDir, "images/" + g).deleteRecursively()
+            } catch (ignored: Exception) {
+                // Nada que borrar.
+            }
             ArchiveStore.set(c, g, false)
         }
         save(c, all.filter { !gone.contains(it.id) })

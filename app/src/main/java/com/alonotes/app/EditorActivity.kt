@@ -1,7 +1,9 @@
 package com.alonotes.app
 
 import android.app.Activity
+import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.RectF
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -14,6 +16,8 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
+import java.util.UUID
 
 /**
  * Editor de una nota. Dos vistas de hojas (ojo de la barra): una hoja centrada y ajustada a la
@@ -23,6 +27,7 @@ import android.widget.Toast
  */
 class EditorActivity : Activity() {
     private companion object {
+        const val REQ_IMAGE = 41
         val DIMS = arrayOf("A5", "A4", "A3", "A2")
         val DIM_LABELS = arrayOf("A5 (148 x 210 mm)", "A4 (210 x 297 mm)", "A3 (297 x 420 mm)", "A2 (420 x 594 mm)")
         val MM = arrayOf(
@@ -43,7 +48,7 @@ class EditorActivity : Activity() {
     private lateinit var counter: TextView
     private lateinit var bar: LinearLayout
     private lateinit var bgLayer: BackgroundLayer
-    private var tool = 0 // 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto
+    private var tool = 0 // 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar
     private lateinit var strokes: DocStrokes
     private var total = 0
     private var themeVer = 0
@@ -87,6 +92,8 @@ class EditorActivity : Activity() {
             persistStrokes()
             persistLayers()
         }
+        // Mover, redimensionar o girar una imagen: solo cambian los datos de las capas.
+        viewport.onItemsChanged = { persistLayers() }
         area.addView(viewport, FrameLayout.LayoutParams(-1, -1))
 
         emptyView = LinearLayout(this)
@@ -191,7 +198,15 @@ class EditorActivity : Activity() {
         if (tool == 2 && !cont) UiKit.ripple(this, eraserBtn, 12, ThemeUtils.accentBg(this))
         bar.addView(eraserBtn, UiKit.box(this, 44))
         val others = intArrayOf(Icons.TEXT, Icons.SHAPES, Icons.IMAGE, Icons.STAR, Icons.SELECT)
-        for (t in others) bar.addView(tb(t, ink) { editOnly { UiKit.soon(this) } }, UiKit.box(this, 44))
+        for (t in others) {
+            val btn = when (t) {
+                Icons.IMAGE -> tb(t, ink) { editOnly { openGallery() } }
+                Icons.SELECT -> tb(t, ink) { pickTool(4) }
+                else -> tb(t, ink) { editOnly { UiKit.soon(this) } }
+            }
+            if (t == Icons.SELECT && tool == 4 && !cont) UiKit.ripple(this, btn, 12, ThemeUtils.accentBg(this))
+            bar.addView(btn, UiKit.box(this, 44))
+        }
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         if (tool == 1 && !cont) {
             PenOptions.build(this, bar) { buildBar() }
@@ -199,6 +214,9 @@ class EditorActivity : Activity() {
             PenOptions.buildEraser(this, bar) { buildBar() }
         } else if (tool == 3 && !cont) {
             PenOptions.buildHighlighter(this, bar) { buildBar() }
+        } else if (tool == 4 && !cont) {
+            // Barra de selección: menú de 3 puntos (por ahora solo "Próximamente")
+            bar.addView(tb(Icons.DOTS_V, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
         } else {
             // Flechas de página: anterior / siguiente
             bar.addView(tb(Icons.UNDO, ink) { viewport.prevPage() }, UiKit.box(this, 44))
@@ -220,6 +238,71 @@ class EditorActivity : Activity() {
         dv.setMargins(dp(8), 0, dp(8), 0)
         bar.addView(div, dv)
         bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+    }
+
+    // ---------- Imágenes ----------
+
+    /** Abre la galería (mismo mecanismo que Ajustes: el proyecto usa Activity simple, sin androidx.activity). */
+    private fun openGallery() {
+        if (total == 0) {
+            Toast.makeText(this, "Primero crea una página", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pl = strokes.page(viewport.index)
+        if (!pl.layers[pl.selected].isVisible) {
+            Toast.makeText(this, "La capa está oculta", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "image/*"
+        @Suppress("DEPRECATION")
+        startActivityForResult(i, REQ_IMAGE)
+    }
+
+    @Suppress("OVERRIDE_DEPRECATION")
+    override fun onActivityResult(req: Int, res: Int, data: Intent?) {
+        super.onActivityResult(req, res, data)
+        val uri = data?.data
+        if (req != REQ_IMAGE || res != RESULT_OK || uri == null) return
+        Toast.makeText(this, "Insertando imagen…", Toast.LENGTH_SHORT).show()
+        Thread {
+            // Se copia reducida (máx. 2048 px, respetando EXIF) a images/<idNota>/ y se decodifica.
+            val id = UUID.randomUUID().toString()
+            val f = ImageUtil.saveFromUri(this, uri, File(File(filesDir, "images/$docId"), id), 2048, 90, true)
+            val bm = if (f != null) ImageUtil.decodeFile(f.path, 2048) else null
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                if (f == null || bm == null) {
+                    Toast.makeText(this, "No se pudo abrir la imagen", Toast.LENGTH_SHORT).show()
+                } else {
+                    insertImage(id, f, bm)
+                }
+            }
+        }.start()
+    }
+
+    /** Coloca la imagen en el centro de la hoja actual, dentro de la capa seleccionada, y activa la herramienta Seleccionar. */
+    private fun insertImage(id: String, f: File, bm: android.graphics.Bitmap) {
+        val sp = viewport.pageSpec()
+        if (total == 0 || sp == null) return
+        val pl = strokes.page(viewport.index)
+        val layer = pl.layers[pl.selected]
+        // Cabe en el 60 % de la hoja, conservando la proporción.
+        val k = minOf(sp.wMm * 0.6f / bm.width, sp.hMm * 0.6f / bm.height)
+        val w = bm.width * k
+        val h = bm.height * k
+        val cx = sp.wMm / 2f
+        val cy = sp.hMm / 2f
+        val item = ImageItem(id, f, RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f), 0f, w)
+        item.bitmap = bm
+        layer.items.add(item)
+        tool = 4
+        viewport.tool = 4
+        viewport.selectItem(item)
+        viewport.refreshPage()
+        buildBar()
+        persistLayers()
     }
 
     private fun pickTool(t: Int) {

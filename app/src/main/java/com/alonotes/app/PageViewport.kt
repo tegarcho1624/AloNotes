@@ -1,7 +1,11 @@
 package com.alonotes.app
 
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -42,14 +46,25 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         private set
     var onPage: (() -> Unit)? = null
 
-    /** 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto (solo en la vista de una hoja). */
+    /** 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar (solo en la vista de una hoja). */
     var tool = 0
         set(v) {
-            if (v != field) cancelStroke()
+            if (v != field) {
+                cancelStroke()
+                endManip()
+                if (v != 4) selItem = null
+            }
             field = v
+            invalidate()
         }
     var strokes: DocStrokes? = null
     var onChanged: ((Int) -> Unit)? = null
+
+    /** Se llama al terminar de mover, redimensionar o girar un elemento (hay que guardar las capas). */
+    var onItemsChanged: (() -> Unit)? = null
+
+    /** Elemento seleccionado (herramienta Seleccionar). */
+    private var selItem: SelectableItem? = null
 
     private var specs: List<Spec> = emptyList()
     private var single: PageView? = null
@@ -106,6 +121,35 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun minZ() = if (continuous) 1f else 0.25f
     private val maxZ = 5f
 
+    // Selección y transformación.
+    private val touchSlop = ViewConfiguration.get(ctx).scaledTouchSlop
+    private var manip = 0 // 0 nada, 1 mover, 2 redimensionar, 3 girar
+    private var mHandle = -1
+    private var mP0x = 0f
+    private var mP0y = 0f
+    private var mRot0 = 0f
+    private var mAng0 = 0f
+    private var mMoved = false
+    private val mB0 = RectF()
+    private val ovStroke = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ovFill = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    private companion object {
+        const val M_MOVE = 1
+        const val M_RESIZE = 2
+        const val M_ROTATE = 3
+
+        // Tiradores: 0 sup-izq, 1 sup, 2 sup-der, 3 izq, 4 der, 5 inf-izq, 6 inf, 7 inf-der (8 = círculo de giro).
+        val HX = intArrayOf(-1, 0, 1, -1, 1, -1, 0, 1)
+        val HY = intArrayOf(-1, -1, -1, 0, 0, 1, 1, 1)
+    }
+
+    init {
+        ovStroke.style = Paint.Style.STROKE
+        ovStroke.strokeWidth = 2f * d
+        ovFill.style = Paint.Style.FILL
+    }
+
     // ---------- API ----------
 
     fun restore(cont: Boolean, idx: Int) {
@@ -115,6 +159,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     fun setPages(list: List<Spec>) {
         cancelStroke()
+        endManip()
+        selItem = null
         specs = list
         index = index.coerceIn(0, max(0, list.size - 1))
         resetTransform()
@@ -143,7 +189,24 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Vuelve a dibujar la hoja actual (por ejemplo, tras cambiar o eliminar una capa). */
     fun refreshPage() {
+        val s = selItem
+        if (s != null && !itemExists(s)) {
+            selItem = null
+            manip = 0
+        }
         single?.invalidate()
+        invalidate()
+    }
+
+    /** Tamaño de la hoja actual (mm), o null si no hay hojas. */
+    fun pageSpec(): Spec? = specs.getOrNull(index)
+
+    /** Selecciona un elemento de la hoja actual (null = quitar la selección). */
+    fun selectItem(item: SelectableItem?) {
+        selItem = item
+        manip = 0
+        single?.invalidate()
+        invalidate()
     }
 
     fun prevPage() = goToPage(index - 1)
@@ -496,6 +559,179 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         penDown = false
     }
 
+    // ---------- Selección y transformación ----------
+
+    private fun itemExists(item: SelectableItem): Boolean {
+        val pl = strokes?.page(index) ?: return false
+        for (ly in pl.layers) for (it in ly.items) if (it === item) return true
+        return false
+    }
+
+    /** Punto de la hoja (mm) -> punto de pantalla de este contenedor, aplicando zoom y rotación de la vista. */
+    private fun pageToScreen(xMm: Float, yMm: Float): FloatArray? {
+        val v = single ?: return null
+        val sc = v.width / v.spec.wMm
+        if (sc <= 0f) return null
+        val pts = floatArrayOf(xMm * sc, yMm * sc)
+        v.matrix.mapPoints(pts)
+        pts[0] += v.left
+        pts[1] += v.top
+        return pts
+    }
+
+    /**
+     * Posición en pantalla de los 9 tiradores (x, y por cada uno): los 8 del recuadro (ver HX/HY) y el círculo de giro,
+     * que está sobre el borde superior, a 32 dp hacia "arriba" del elemento.
+     */
+    private fun handlePts(item: SelectableItem): FloatArray? {
+        val b = item.bounds
+        val w = b.width()
+        val h = b.height()
+        val out = FloatArray(18)
+        for (i in 0 until 8) {
+            val p = Xf.toPage(b.centerX(), b.centerY(), item.rotation, HX[i] * w / 2f, HY[i] * h / 2f)
+            val s = pageToScreen(p[0], p[1]) ?: return null
+            out[i * 2] = s[0]
+            out[i * 2 + 1] = s[1]
+        }
+        val c = pageToScreen(b.centerX(), b.centerY()) ?: return null
+        var ux = out[2] - c[0]
+        var uy = out[3] - c[1]
+        val n = hypot(ux, uy)
+        if (n < 1e-3f) {
+            ux = 0f
+            uy = -1f
+        } else {
+            ux /= n
+            uy /= n
+        }
+        out[16] = out[2] + ux * 32f * d
+        out[17] = out[3] + uy * 32f * d
+        return out
+    }
+
+    /** Índice del tirador tocado (0..7, 8 = giro) o -1. El círculo de giro tiene prioridad. */
+    private fun hitHandle(pts: FloatArray, x: Float, y: Float): Int {
+        if (hypot(x - pts[16], y - pts[17]) <= 26f * d) return 8
+        var best = -1
+        var bd = 22f * d
+        for (i in 0 until 8) {
+            val dd = hypot(x - pts[i * 2], y - pts[i * 2 + 1])
+            if (dd <= bd) {
+                bd = dd
+                best = i
+            }
+        }
+        return best
+    }
+
+    /** Elemento más arriba bajo el punto (capas visibles, de la de arriba a la de abajo). */
+    private fun hitItem(xMm: Float, yMm: Float): SelectableItem? {
+        val pl = strokes?.page(index) ?: return null
+        for (li in pl.layers.indices.reversed()) {
+            val ly = pl.layers[li]
+            if (!ly.isVisible) continue
+            for (k in ly.items.indices.reversed()) if (ly.items[k].hit(xMm, yMm)) return ly.items[k]
+        }
+        return null
+    }
+
+    private fun beginSelect(e: MotionEvent, stylus: Boolean) {
+        if (!stylus && e.eventTime - lastStylusT < 1500) return // palma
+        val p = toPage(e.x, e.y) ?: return
+        val sel = selItem
+        if (sel != null) {
+            val pts = handlePts(sel)
+            val h = if (pts != null) hitHandle(pts, e.x, e.y) else -1
+            if (h >= 0) {
+                startManip(sel, if (h == 8) M_ROTATE else M_RESIZE, h, p)
+                return
+            }
+            if (sel.hit(p[0], p[1])) {
+                startManip(sel, M_MOVE, -1, p)
+                return
+            }
+        }
+        val hit = hitItem(p[0], p[1])
+        selItem = hit
+        if (hit != null) startManip(hit, M_MOVE, -1, p) // se selecciona y ya se puede arrastrar
+        invalidate()
+    }
+
+    private fun startManip(item: SelectableItem, kind: Int, handle: Int, p: FloatArray) {
+        manip = kind
+        mHandle = handle
+        mP0x = p[0]
+        mP0y = p[1]
+        mB0.set(item.bounds)
+        mRot0 = item.rotation
+        mAng0 = Xf.angleDeg(p[0] - mB0.centerX(), p[1] - mB0.centerY())
+        mMoved = false
+        invalidate()
+    }
+
+    private fun selMove(e: MotionEvent) {
+        val item = selItem ?: return
+        if (!mMoved && hypot(e.x - sx, e.y - sy) < touchSlop) return // un toque no mueve nada
+        val p = toPage(e.x, e.y) ?: return
+        mMoved = true
+        when (manip) {
+            M_MOVE -> {
+                item.bounds.set(mB0)
+                item.bounds.offset(p[0] - mP0x, p[1] - mP0y)
+            }
+            M_RESIZE -> Xf.resize(mB0, mRot0, HX[mHandle], HY[mHandle], p[0], p[1], item.lockAspect, item.bounds)
+            M_ROTATE -> {
+                // Ángulo del puntero respecto al centro (Math.atan2); se suma lo que giró desde que se agarró el círculo.
+                val ang = Xf.angleDeg(p[0] - mB0.centerX(), p[1] - mB0.centerY())
+                item.rotation = Xf.normalize(mRot0 + (ang - mAng0))
+            }
+        }
+        single?.invalidate()
+        invalidate()
+    }
+
+    private fun endManip() {
+        if (manip == 0) return
+        manip = 0
+        if (mMoved) {
+            mMoved = false
+            onItemsChanged?.invoke()
+        }
+    }
+
+    override fun dispatchDraw(canvas: Canvas) {
+        super.dispatchDraw(canvas)
+        drawSelection(canvas)
+    }
+
+    /** Recuadro, 8 tiradores y círculo de giro del elemento seleccionado (se dibuja encima de la hoja, sin recorte). */
+    private fun drawSelection(c: Canvas) {
+        val item = selItem ?: return
+        if (tool != 4 || continuous) return
+        val pts = handlePts(item) ?: return
+        val acc = ThemeUtils.accentHi(context)
+        val ink = context.getColor(R.color.ink)
+        ovStroke.color = acc
+        val path = Path()
+        path.moveTo(pts[0], pts[1])
+        path.lineTo(pts[4], pts[5])
+        path.lineTo(pts[14], pts[15])
+        path.lineTo(pts[10], pts[11])
+        path.close()
+        c.drawPath(path, ovStroke)
+        c.drawLine(pts[2], pts[3], pts[16], pts[17], ovStroke)
+        for (i in 0 until 8) {
+            ovFill.color = ink
+            c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovFill)
+            c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovStroke)
+        }
+        ovFill.color = acc
+        c.drawCircle(pts[16], pts[17], 9f * d, ovFill)
+        ovStroke.color = ink
+        c.drawCircle(pts[16], pts[17], 9f * d, ovStroke)
+    }
+
     // ---------- Gestos de vista ----------
 
     private fun initTwo(e: MotionEvent) {
@@ -555,7 +791,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val dy = e.y - ly
         lx = e.x
         ly = e.y
-        if (continuous || (tool == 0 && z > 1.05f)) {
+        if (continuous || ((tool == 0 || tool == 4) && z > 1.05f)) {
             tx += dx
             ty += dy
             clamp()
@@ -567,6 +803,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun goTo(n: Int, forward: Boolean) {
         if (n < 0 || n >= specs.size || n == index) return
         index = n
+        endManip()
+        selItem = null
         resetTransform()
         rebuild()
         single?.let {
@@ -580,11 +818,13 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (specs.isEmpty()) return false
         val stylus = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
-        val drawTool = tool != 0 && !continuous && single != null
+        val toolActive = tool != 0 && !continuous && single != null
+        val drawTool = toolActive && tool != 4
+        val selTool = toolActive && tool == 4
         if (stylus) lastStylusT = e.eventTime
         // Sin herramienta el stylus no mueve la vista (queda reservado para dibujar).
-        if (e.pointerCount == 1 && stylus && !drawTool) return false
-        if (!drawTool) gd.onTouchEvent(e)
+        if (e.pointerCount == 1 && stylus && !toolActive) return false
+        if (!toolActive) gd.onTouchEvent(e)
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 scroller.forceFinished(true)
@@ -597,11 +837,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 vel?.recycle()
                 vel = VelocityTracker.obtain()
                 vel?.addMovement(e)
-                if (drawTool) beginStroke(e, stylus)
+                if (drawTool) beginStroke(e, stylus) else if (selTool) beginSelect(e, stylus)
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 if (e.pointerCount == 2) {
                     cancelStroke() // un segundo dedo = gesto de vista, no trazo
+                    endManip()
                     mode = 2
                     multi = true
                     initTwo(e)
@@ -611,7 +852,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 vel?.addMovement(e)
                 if (mode == 2 && e.pointerCount >= 2) twoFinger(e)
                 else if (mode == 1) {
-                    if (penDown) drawMove(e, stylus) else oneFinger(e)
+                    if (penDown) drawMove(e, stylus) else if (manip != 0) selMove(e) else oneFinger(e)
                 }
             }
             MotionEvent.ACTION_POINTER_UP -> {
@@ -627,7 +868,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 vel?.addMovement(e)
                 vel?.computeCurrentVelocity(1000)
                 if (penDown) endStroke(e)
-                if (!multi && !drawTool) {
+                endManip()
+                if (!multi && !toolActive) {
                     if (continuous) {
                         val b = contBounds()
                         scroller.fling(
@@ -650,6 +892,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
             MotionEvent.ACTION_CANCEL -> {
                 if (penDown) cancelStroke()
+                endManip()
                 vel?.recycle()
                 vel = null
                 mode = 0

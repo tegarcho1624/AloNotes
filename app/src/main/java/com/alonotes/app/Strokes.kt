@@ -57,7 +57,9 @@ internal data class Layer(
     var isVisible: Boolean = true,
     var opacity: Float = 1f,
     // Los trazos no se serializan aquí: van en strokes/<id>.bin.
-    @Transient val canvas: ArrayList<Stroke> = ArrayList()
+    @Transient val canvas: ArrayList<Stroke> = ArrayList(),
+    // Imágenes de la capa (se guardan aparte: archivos en images/<idNota>/ y sus datos en layers/<idNota>.json).
+    @Transient val items: ArrayList<ImageItem> = ArrayList()
 )
 
 /** Capas de una hoja (la primera es la de abajo) y cuál está seleccionada. Siempre hay al menos una. */
@@ -114,7 +116,10 @@ internal class PageLayers(first: List<Stroke>? = null) {
      * Restaura las capas guardadas (sin trazos) y reparte entre ellas los trazos cargados, usando cuántos
      * tenía cada una. Si los números no cuadran con los trazos cargados, todos quedan en la primera capa.
      */
-    fun restore(saved: List<Layer>, sel: Int, counts: List<Int>) {
+    fun restore(
+        saved: List<Layer>, sel: Int, counts: List<Int>,
+        images: List<List<ImageDto>> = emptyList(), imgDir: File? = null
+    ) {
         if (saved.isEmpty() || saved.size > MAX) return
         val flat = flatten()
         val ok = counts.size == saved.size && counts.all { it >= 0 } && counts.sum() == flat.size
@@ -124,6 +129,12 @@ internal class PageLayers(first: List<Stroke>? = null) {
             val n = if (ok) counts[i] else if (i == 0) flat.size else 0
             for (k in 0 until n) l.canvas.add(flat[pos + k])
             pos += n
+            if (imgDir != null) {
+                for (dto in images.getOrNull(i).orEmpty()) {
+                    if (dto.r <= dto.l || dto.b <= dto.t) continue
+                    l.items.add(ImageItem(dto.id, File(imgDir, dto.file), RectF(dto.l, dto.t, dto.r, dto.b), dto.rot, dto.bw))
+                }
+            }
         }
         layers.clear()
         layers.addAll(saved)
@@ -418,6 +429,13 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
                 if (!ly.isVisible) continue
                 val a = (ly.opacity.coerceIn(0f, 1f) * 255f).roundToInt()
                 val sc = if (a < 255) c.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), a) else -1
+                if (ly.items.isNotEmpty()) {
+                    // Las imágenes solo se ven dentro de la hoja (lo que se sale queda recortado), debajo de los trazos.
+                    val n = c.save()
+                    c.clipRect(0f, 0f, width.toFloat(), height.toFloat())
+                    for (im in ly.items) im.draw(c, scale) { postInvalidate() }
+                    c.restoreToCount(n)
+                }
                 for (s in ly.canvas) StrokeRender.draw(c, s, scale, pen)
                 // El trazo en curso pertenece a la capa seleccionada.
                 if (i == pl.selected) live?.let { StrokeRender.draw(c, it, scale, pen) }
