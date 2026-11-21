@@ -94,6 +94,14 @@ el ícono del launcher (color fijo).
 
 **No cambia:** datos de notas, trazos (`strokes/*.bin`), carpetas, fondos, fuentes, acento y opciones del lápiz.
 
+## Fase 6b — Herramientas del panel de capas (v0.5.1)
+- El panel ahora es una fila de tres partes: **barra izquierda** (40 dp: agregar, duplicar, bajar capa), **columna central**
+  (lista, modo de fusión y opacidad) y **barra derecha** (40 dp: configuración, bloquear alfa, subir, eliminar, más opciones).
+- La fila "Capa 1" lleva miniatura con fondo de tablero (transparencia), ojo, nombre y menú (≡) a la derecha.
+- Sobre la opacidad hay una fila con flecha-a-línea, candado pequeño y el modo "Normal".
+- **Todos los botones nuevos muestran "Próximamente"** (`UiKit.soon`); no hay lógica real de capas todavía.
+- Íconos nuevos en `Icons.kt`: `COPY`, `ARROW_DOWN`, `ARROW_UP`, `ARROW_DOWN_LINE`, `CHECKER` y `DOTS_V`. Se usan colores existentes.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

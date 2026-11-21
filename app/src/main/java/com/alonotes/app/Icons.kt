@@ -57,6 +57,12 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val EYE_ALT = 40
         const val MINIMIZE = 41
         const val GRIP = 42
+        const val COPY = 43
+        const val ARROW_DOWN = 44
+        const val ARROW_UP = 45
+        const val ARROW_DOWN_LINE = 46
+        const val CHECKER = 47
+        const val DOTS_V = 48
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -308,6 +314,20 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
             }
             MINIMIZE -> { rr(c, 4, 4, 20, 20, 3); ln(c, 8, 15, 16, 15) }
             GRIP -> ln(c, 6, 12, 18, 12)
+            COPY -> { rr(c, 9, 9, 20, 20, 2); poly(c, false, 15, 9, 15, 5, 5, 5, 5, 15, 9, 15) }
+            ARROW_DOWN -> { ln(c, 12, 5, 12, 19); poly(c, false, 6, 13, 12, 19, 18, 13) }
+            ARROW_UP -> { ln(c, 12, 19, 12, 5); poly(c, false, 6, 11, 12, 5, 18, 11) }
+            ARROW_DOWN_LINE -> { ln(c, 12, 4, 12, 15); poly(c, false, 7, 10, 12, 15, 17, 10); ln(c, 5, 20, 19, 20) }
+            CHECKER -> {
+                rr(c, 4, 4, 20, 20, 2)
+                p.style = Paint.Style.FILL
+                rr(c, 4, 4, 12, 12, 0)
+                rr(c, 12, 12, 20, 20, 0)
+            }
+            DOTS_V -> {
+                p.style = Paint.Style.FILL
+                circ(c, 12, 5, 1.8f); circ(c, 12, 12, 1.8f); circ(c, 12, 19, 1.8f)
+            }
             else -> {}
         }
         c.restore()

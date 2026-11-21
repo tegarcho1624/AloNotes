@@ -1,14 +1,20 @@
 package com.alonotes.app
 
 import android.app.Activity
+import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Canvas
+import android.graphics.Outline
+import android.graphics.Paint
 import android.os.Bundle
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
@@ -88,22 +94,82 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         attachDrag(bar, null)
         full.addView(bar, LinearLayout.LayoutParams(-1, dp(44)))
 
+        // Cuerpo: barra izquierda | columna central | barra derecha
+        val body = LinearLayout(a)
+        body.orientation = LinearLayout.HORIZONTAL
+        body.addView(sideBar(intArrayOf(Icons.PLUS, Icons.COPY, Icons.ARROW_DOWN)), LinearLayout.LayoutParams(dp(40), -1))
+        body.addView(vline(), LinearLayout.LayoutParams(dp(1), -1))
+        body.addView(buildCenter(), LinearLayout.LayoutParams(0, -1, 1f))
+        body.addView(vline(), LinearLayout.LayoutParams(dp(1), -1))
+        body.addView(
+            sideBar(intArrayOf(Icons.CHECKER, Icons.LOCK, Icons.ARROW_UP, Icons.TRASH, Icons.DOTS_V)),
+            LinearLayout.LayoutParams(dp(40), -1)
+        )
+        full.addView(body, LinearLayout.LayoutParams(-1, 0, 1f))
+    }
+
+    private fun vline(): View {
+        val v = View(a)
+        v.setBackgroundColor(a.getColor(R.color.ln))
+        return v
+    }
+
+    /** Barra vertical de 40 dp con botones de herramienta (todos "Próximamente"). */
+    private fun sideBar(icons: IntArray): View {
+        val col = LinearLayout(a)
+        col.orientation = LinearLayout.VERTICAL
+        val ink = a.getColor(R.color.ink)
+        for (t in icons) col.addView(UiKit.iconBtn(a, t, ink, 40, 22) { UiKit.soon(a) }, UiKit.box(a, 40))
+        val sv = ScrollView(a)
+        sv.isVerticalScrollBarEnabled = false
+        sv.setBackgroundColor(a.getColor(R.color.sf))
+        sv.addView(col, ViewGroup.LayoutParams(-1, -2))
+        return sv
+    }
+
+    /** Columna central: lista de capas, modo de fusión y opacidad. */
+    private fun buildCenter(): View {
+        val center = LinearLayout(a)
+        center.orientation = LinearLayout.VERTICAL
+
         // Lista de capas
         listBox.orientation = LinearLayout.VERTICAL
-        listBox.setPadding(dp(8), dp(8), dp(8), dp(8))
+        listBox.setPadding(dp(6), dp(8), dp(6), dp(8))
         val sv = ScrollView(a)
         sv.addView(listBox, ViewGroup.LayoutParams(-1, -2))
-        full.addView(sv, LinearLayout.LayoutParams(-1, 0, 1f))
+        center.addView(sv, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Barra inferior: opacidad (solo visual por ahora)
+        // Zona de fusión, justo encima de la opacidad
+        val ink = a.getColor(R.color.ink)
         val line = View(a)
         line.setBackgroundColor(a.getColor(R.color.ln))
-        full.addView(line, LinearLayout.LayoutParams(-1, dp(1)))
+        center.addView(line, LinearLayout.LayoutParams(-1, dp(1)))
+        val blend = LinearLayout(a)
+        blend.gravity = Gravity.CENTER_VERTICAL
+        blend.setPadding(dp(4), 0, dp(8), 0)
+        blend.addView(UiKit.iconBtn(a, Icons.ARROW_DOWN_LINE, ink, 36, 20) { UiKit.soon(a) }, UiKit.box(a, 36))
+        blend.addView(UiKit.iconBtn(a, Icons.LOCK, ink, 36, 16) { UiKit.soon(a) }, UiKit.box(a, 36))
+        val mode = LinearLayout(a)
+        mode.gravity = Gravity.CENTER_VERTICAL
+        mode.setPadding(dp(10), 0, dp(6), 0)
+        UiKit.ripple(a, mode, 10, 0)
+        mode.addView(UiKit.text(a, "Normal", 14, ink), LinearLayout.LayoutParams(0, -2, 1f))
+        mode.addView(ImageView(a).also { it.setImageDrawable(Icons(Icons.CHEV, a.getColor(R.color.mut), false)) }, UiKit.box(a, 18))
+        mode.setOnClickListener { UiKit.soon(a) }
+        val mp = LinearLayout.LayoutParams(0, dp(34), 1f)
+        mp.leftMargin = dp(4)
+        blend.addView(mode, mp)
+        center.addView(blend, LinearLayout.LayoutParams(-1, dp(42)))
+
+        // Opacidad (solo visual por ahora)
+        val line2 = View(a)
+        line2.setBackgroundColor(a.getColor(R.color.ln))
+        center.addView(line2, LinearLayout.LayoutParams(-1, dp(1)))
         val foot = LinearLayout(a)
         foot.gravity = Gravity.CENTER_VERTICAL
         foot.setBackgroundColor(a.getColor(R.color.sf))
-        foot.setPadding(dp(14), 0, dp(14), 0)
-        foot.addView(pct, LinearLayout.LayoutParams(dp(52), -2))
+        foot.setPadding(dp(10), 0, dp(10), 0)
+        foot.addView(pct, LinearLayout.LayoutParams(dp(46), -2))
         val seek = SeekBar(a)
         seek.max = 100
         seek.progress = 100
@@ -119,7 +185,8 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             override fun onStopTrackingTouch(sb: SeekBar) {}
         })
         foot.addView(seek, LinearLayout.LayoutParams(0, -2, 1f))
-        full.addView(foot, LinearLayout.LayoutParams(-1, dp(52)))
+        center.addView(foot, LinearLayout.LayoutParams(-1, dp(52)))
+        return center
     }
 
     private fun buildMini() {
@@ -135,17 +202,23 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     }
 
     private fun row(n: Int, selected: Boolean): View {
+        val ink = a.getColor(R.color.ink)
         val r = LinearLayout(a)
         r.gravity = Gravity.CENTER_VERTICAL
-        r.setPadding(dp(4), 0, dp(8), 0)
+        r.setPadding(dp(6), 0, dp(2), 0)
         if (selected) r.background = UiKit.rect(a, ThemeUtils.accentBg(a), 10)
         else UiKit.ripple(a, r, 10, 0)
-        r.addView(UiKit.iconBtn(a, Icons.EYE, ThemeUtils.accentHi(a), 40, 22) { UiKit.soon(a) }, UiKit.box(a, 40))
-        val t = UiKit.text(a, "Capa $n", 15, a.getColor(R.color.ink))
+        // Miniatura con fondo de tablero (transparencia)
+        r.addView(Checker(a), UiKit.box(a, 32))
+        val eye = UiKit.iconBtn(a, Icons.EYE, ThemeUtils.accentHi(a), 36, 22) { UiKit.soon(a) }
+        val ep = UiKit.box(a, 36)
+        ep.leftMargin = dp(4)
+        r.addView(eye, ep)
         val tp = LinearLayout.LayoutParams(0, -2, 1f)
-        tp.leftMargin = dp(8)
-        r.addView(t, tp)
-        val lp = LinearLayout.LayoutParams(-1, dp(48))
+        tp.leftMargin = dp(4)
+        r.addView(UiKit.text(a, "Capa $n", 15, ink), tp)
+        r.addView(UiKit.iconBtn(a, Icons.MENU, ink, 36, 20) { UiKit.soon(a) }, UiKit.box(a, 36))
+        val lp = LinearLayout.LayoutParams(-1, dp(52))
         lp.bottomMargin = dp(4)
         r.layoutParams = lp
         return r
@@ -263,6 +336,34 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             x = b.getFloat("lp_x")
             y = b.getFloat("lp_y")
             placed = true
+        }
+    }
+}
+
+/** Cuadro pequeño con fondo de tablero de ajedrez, para simular transparencia. */
+private class Checker(private val ctx: Context) : View(ctx) {
+    private val paint = Paint()
+    private val c1 = ctx.getColor(R.color.mut)
+    private val c2 = ctx.getColor(R.color.ln2)
+
+    init {
+        outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, UiKit.dp(ctx, 6).toFloat())
+            }
+        }
+        clipToOutline = true
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val n = 4
+        val sw = width / n.toFloat()
+        val sh = height / n.toFloat()
+        for (i in 0 until n) {
+            for (j in 0 until n) {
+                paint.color = if ((i + j) % 2 == 0) c1 else c2
+                canvas.drawRect(i * sw, j * sh, (i + 1) * sw, (j + 1) * sh, paint)
+            }
         }
     }
 }
