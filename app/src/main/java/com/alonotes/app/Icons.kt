@@ -66,6 +66,7 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val COPY_PLUS = 49
         const val MOVE = 50
         const val EYE_OFF = 51
+        const val STAR_FILL = 52
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -276,6 +277,19 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
             }
             EYEDROPPER -> { poly(c, true, 4, 20, 5.5f, 15.5f, 14, 7, 17, 10, 8.5f, 18.5f); ln(c, 13, 5, 19, 11) }
             NOTES -> { rr(c, 3, 5, 21, 19, 2); ln(c, 7, 10, 17, 10); ln(c, 7, 14, 13, 14) }
+            STAR_FILL -> {
+                q.reset()
+                for (i in 0 until 10) {
+                    val rad = if (i % 2 == 0) 9f else 4f
+                    val a = Math.toRadians(-90.0 + 36 * i)
+                    val x = 12f + rad * cos(a).toFloat()
+                    val y = 12.8f + rad * sin(a).toFloat()
+                    if (i == 0) q.moveTo(x, y) else q.lineTo(x, y)
+                }
+                q.close()
+                p.style = Paint.Style.FILL
+                c.drawPath(q, p)
+            }
             STAR5 -> {
                 q.reset()
                 for (i in 0 until 10) {

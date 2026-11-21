@@ -144,6 +144,20 @@ el ícono del launcher (color fijo).
 - El fondo es `@color/ic_bg`, ahora #000000 (antes #141414). `ic_launcher.xml` e `ic_launcher_round.xml` no cambiaron (mismos nombres).
 - La app usa el color fijo del ícono; no depende del acento dinámico.
 
+## Fase 10 — Categorías, favoritos y modos de vista (v0.9.0)
+- **Datos:** `Category(id, nombre, esPorDefecto)` y `CategoryStore` (`Categories.kt`, clave `cats` en las preferencias `notes`).
+  "Mis notas" (id `default`) se crea sola. `NoteStore.Item` ganó `categoryId` (clave `c`) e `isFavorite` (clave `fav`).
+  Al abrir por primera vez (`NoteStore.migrate`) todo lo existente queda en `default`; lo que no tenga categoría cuenta como `default`.
+- **Menú lateral:** se quitó "Sin categorizar". Las categorías son una lista dinámica; tocar una carga sus carpetas y notas y el título
+  de la barra pasa a ser su nombre. Toque largo: Renombrar / Eliminar (la de por defecto no se elimina; al eliminar una, su contenido
+  pasa a "Mis notas"). "Nueva categoría" crea y abre una.
+- **Modos de vista:** `MODO_CARPETAS` (por defecto), `MODO_TODAS_LAS_NOTAS` (lista plana de la categoría actual) y `MODO_FAVORITOS`
+  (lista plana de favoritas de todas las categorías). En las listas planas no se reordena.
+- **Favoritos:** en las opciones de una nota (toque largo sin mover, o la flecha de la tarjeta) aparece "Añadir a Favoritos" /
+  "Quitar de Favoritos" (estrella vacía / rellena, `STAR_FILL`).
+- **Botón +:** en carpetas abre el menú de siempre; en listas planas crea una nota directamente (en Favoritos nace favorita).
+- El orden manual de la raíz se guarda por categoría (la de por defecto conserva la clave de antes). Capas y trazos no cambian.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

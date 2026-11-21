@@ -9,8 +9,9 @@ import java.util.UUID
 /**
  * Biblioteca de notas y carpetas. SharedPreferences "notes", clave "items" (JSON):
  * [{"i":id,"p":idCarpetaPadre ("" = raíz),"n":nombre,"f":esCarpeta,"t":fecha ms,
+ *   "c":idCategoria ("default" si falta),"fav":esFavorita,
  *   "pg":[{"d":"A4","o":"L"|"P","bg":colorARGB}]}]
- * JSON corrupto => lista vacía, sin crash.
+ * Las categorías están en CategoryStore. JSON corrupto => lista vacía, sin crash.
  */
 internal object NoteStore {
     class Item {
@@ -20,6 +21,8 @@ internal object NoteStore {
         var folder = false
         var t = 0L
         var pages = JSONArray()
+        var categoryId = CategoryStore.DEFAULT_ID
+        var isFavorite = false
     }
 
     private fun sp(c: Context): SharedPreferences =
@@ -38,6 +41,8 @@ internal object NoteStore {
                 it.name = o.optString("n")
                 it.folder = o.optBoolean("f")
                 it.t = o.optLong("t")
+                it.categoryId = o.optString("c", CategoryStore.DEFAULT_ID).ifEmpty { CategoryStore.DEFAULT_ID }
+                it.isFavorite = o.optBoolean("fav", false)
                 o.optJSONArray("pg")?.let { pg -> it.pages = pg }
                 out.add(it)
             }
@@ -58,6 +63,8 @@ internal object NoteStore {
                 o.put("n", it.name)
                 o.put("f", it.folder)
                 o.put("t", it.t)
+                o.put("c", it.categoryId)
+                o.put("fav", it.isFavorite)
                 o.put("pg", it.pages)
                 a.put(o)
             }
@@ -67,11 +74,86 @@ internal object NoteStore {
         }
     }
 
-    /** Carpetas primero (sin las archivadas), luego notas; orden manual guardado y lo nuevo al final. */
-    fun children(c: Context, parent: String): List<Item> {
-        val all = load(c).filter { it.parent == parent }
+    /**
+     * Primera vez con categorías: crea "Mis notas" y escribe la categoría "default" en todo lo existente
+     * (así los datos viejos no se rompen). Se ejecuta una sola vez.
+     */
+    @Synchronized
+    fun migrate(c: Context) {
+        CategoryStore.all(c)
+        if (sp(c).getBoolean("cat_migrated", false)) return
+        val l = load(c)
+        if (l.isNotEmpty()) save(c, l)
+        sp(c).edit().putBoolean("cat_migrated", true).apply()
+    }
+
+    /** Categoría efectiva: si la guardada ya no existe, cuenta como "default". */
+    private fun catOf(x: Item, known: Set<String>): String =
+        if (known.contains(x.categoryId)) x.categoryId else CategoryStore.DEFAULT_ID
+
+    /** Clave del orden manual: la carpeta padre o, en la raíz, la categoría ("" para "default", como antes). */
+    fun orderKey(parent: String, category: String): String =
+        if (parent.isNotEmpty()) parent else if (category == CategoryStore.DEFAULT_ID) "" else "@" + category
+
+    /** ¿Está x dentro de una carpeta archivada (a cualquier nivel)? */
+    private fun underArchived(x: Item, byId: Map<String, Item>, arch: Collection<String>): Boolean {
+        var p = x.parent
+        var guard = 0
+        while (p.isNotEmpty() && guard++ < 64) {
+            if (arch.contains(p)) return true
+            p = byId[p]?.parent ?: return false
+        }
+        return false
+    }
+
+    /** Todas las notas (sin carpetas, a cualquier nivel) de una categoría, las más recientes primero. */
+    fun allNotes(c: Context, category: String): List<Item> {
+        val known = CategoryStore.ids(c)
+        val items = load(c)
+        val byId = items.associateBy { it.id }
         val arch = ArchiveStore.ids(c)
-        val saved = OrderStore.get(c, parent)
+        return items.filter { !it.folder && catOf(it, known) == category && !underArchived(it, byId, arch) }
+            .sortedByDescending { it.t }
+    }
+
+    /** Notas favoritas de todas las categorías, las más recientes primero. */
+    fun favorites(c: Context): List<Item> {
+        val items = load(c)
+        val byId = items.associateBy { it.id }
+        val arch = ArchiveStore.ids(c)
+        return items.filter { !it.folder && it.isFavorite && !underArchived(it, byId, arch) }
+            .sortedByDescending { it.t }
+    }
+
+    @Synchronized
+    fun setFavorite(c: Context, id: String, value: Boolean) {
+        val all = load(c)
+        var changed = false
+        for (x in all) if (x.id == id && !x.folder && x.isFavorite != value) {
+            x.isFavorite = value
+            changed = true
+        }
+        if (changed) save(c, all)
+    }
+
+    /** Pasa todo lo de la categoría [from] a [to] (al eliminar una categoría). */
+    @Synchronized
+    fun reassignCategory(c: Context, from: String, to: String) {
+        val all = load(c)
+        var changed = false
+        for (x in all) if (x.categoryId == from) {
+            x.categoryId = to
+            changed = true
+        }
+        if (changed) save(c, all)
+    }
+
+    /** Carpetas primero (sin las archivadas), luego notas; orden manual guardado y lo nuevo al final. En la raíz solo la categoría dada. */
+    fun children(c: Context, parent: String, category: String = CategoryStore.DEFAULT_ID): List<Item> {
+        val known = CategoryStore.ids(c)
+        val all = load(c).filter { it.parent == parent && (parent.isNotEmpty() || catOf(it, known) == category) }
+        val arch = ArchiveStore.ids(c)
+        val saved = OrderStore.get(c, orderKey(parent, category))
         val folders = all.filter { it.folder && !arch.contains(it.id) }.sortedByDescending { it.t }
         val docs = all.filter { !it.folder }.sortedByDescending { it.t }
         return OrderStore.applyOrder(folders, saved) { it.id } + OrderStore.applyOrder(docs, saved) { it.id }
@@ -92,7 +174,10 @@ internal object NoteStore {
     fun get(c: Context, id: String): Item? = load(c).firstOrNull { it.id == id }
 
     @Synchronized
-    fun add(c: Context, parent: String, folder: Boolean, name: String?): Item {
+    fun add(
+        c: Context, parent: String, folder: Boolean, name: String?,
+        category: String = CategoryStore.DEFAULT_ID, favorite: Boolean = false
+    ): Item {
         val all = load(c)
         var nm = name?.trim().orEmpty()
         if (nm.isEmpty()) {
@@ -105,6 +190,8 @@ internal object NoteStore {
         it.name = nm
         it.folder = folder
         it.t = System.currentTimeMillis()
+        it.categoryId = category
+        it.isFavorite = favorite && !folder
         all.add(it)
         save(c, all)
         return it

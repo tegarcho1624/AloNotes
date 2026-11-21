@@ -32,6 +32,9 @@ class MainActivity : Activity() {
     }
 
     private var folderId = ""
+    private var categoryId = CategoryStore.DEFAULT_ID
+    private var viewMode = ViewMode.MODO_CARPETAS
+    private lateinit var drawerPanel: DrawerPanel
     private val items = ArrayList<NoteStore.Item>()
     private lateinit var rv: RecyclerView
     private lateinit var glm: GridLayoutManager
@@ -51,13 +54,51 @@ class MainActivity : Activity() {
     private val fmt = SimpleDateFormat("EEE dd MMM, HH:mm", Locale("es"))
 
     private fun dp(v: Number) = UiKit.dp(this, v)
-    private fun off() = if (folderId.isEmpty()) 0 else 1
+    /** El botón "Atrás" de la cuadrícula solo existe dentro de una carpeta en el modo de carpetas. */
+    private fun hasBack() = viewMode == ViewMode.MODO_CARPETAS && folderId.isNotEmpty()
+    private fun off() = if (hasBack()) 1 else 0
+
+    /** Lo que pide el menú lateral: cambiar de categoría o de modo de vista. */
+    private val host = object : DrawerHost {
+        override val currentCategoryId: String get() = categoryId
+        override val mode: ViewMode get() = viewMode
+
+        override fun onSelectCategory(id: String) {
+            categoryId = id
+            viewMode = ViewMode.MODO_CARPETAS
+            folderId = ""
+            refresh()
+        }
+
+        override fun onSelectAll() {
+            viewMode = ViewMode.MODO_TODAS_LAS_NOTAS
+            folderId = ""
+            refresh()
+        }
+
+        override fun onSelectFavorites() {
+            viewMode = ViewMode.MODO_FAVORITOS
+            folderId = ""
+            refresh()
+        }
+
+        override fun onCategoriesChanged() = refresh()
+    }
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
         ThemeUtils.applyTo(this)
         themeVer = ThemeUtils.version()
-        if (b != null) folderId = b.getString("folder") ?: ""
+        NoteStore.migrate(this)
+        if (b != null) {
+            folderId = b.getString("folder") ?: ""
+            categoryId = b.getString("cat") ?: CategoryStore.DEFAULT_ID
+            viewMode = try {
+                ViewMode.valueOf(b.getString("mode") ?: "")
+            } catch (e: Exception) {
+                ViewMode.MODO_CARPETAS
+            }
+        }
         val ink = getColor(R.color.ink)
         val hi = ThemeUtils.accentHi(this)
 
@@ -97,7 +138,7 @@ class MainActivity : Activity() {
         glm = GridLayoutManager(this, spanCount())
         glm.spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
             override fun getSpanSize(position: Int): Int =
-                if (folderId.isNotEmpty() && position == 0) glm.spanCount else 1
+                if (hasBack() && position == 0) glm.spanCount else 1
         }
         rv.layoutManager = glm
         adapter = Adapter()
@@ -127,7 +168,10 @@ class MainActivity : Activity() {
         root.addView(menu, mp)
 
         fab = circle(Icons.PLUS)
-        fab.setOnClickListener { toggleMenu(true) }
+        fab.setOnClickListener {
+            // Carpetas: menú (documento/carpeta). Listas planas: crea una nota directamente.
+            if (viewMode == ViewMode.MODO_CARPETAS) toggleMenu(true) else newDocument()
+        }
         val fp = FrameLayout.LayoutParams(dp(60), dp(60), Gravity.BOTTOM or Gravity.END)
         fp.setMargins(0, 0, dp(20), dp(20))
         root.addView(fab, fp)
@@ -135,7 +179,8 @@ class MainActivity : Activity() {
         // Menú lateral: botón de tres rayas o deslizar desde la izquierda
         val panelW = minOf(dp(320), (resources.displayMetrics.widthPixels * 0.85f).toInt())
         drawer = SideDrawerLayout(this, panelW)
-        drawer.setup(root, DrawerPanel.build(this, drawer))
+        drawerPanel = DrawerPanel(this, drawer, host)
+        drawer.setup(root, drawerPanel.view)
         setContentView(drawer)
     }
 
@@ -150,6 +195,8 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(o: Bundle) {
         super.onSaveInstanceState(o)
         o.putString("folder", folderId)
+        o.putString("cat", categoryId)
+        o.putString("mode", viewMode.name)
     }
 
     override fun onResume() {
@@ -171,7 +218,11 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         if (drawer.isOpen) drawer.close()
         else if (fabMenu.visibility == View.VISIBLE) toggleMenu(false)
-        else if (folderId.isNotEmpty()) goUp()
+        else if (hasBack()) goUp()
+        else if (viewMode != ViewMode.MODO_CARPETAS) {
+            viewMode = ViewMode.MODO_CARPETAS
+            refresh()
+        }
         else super.onBackPressed()
     }
 
@@ -189,11 +240,24 @@ class MainActivity : Activity() {
     // ---------- Datos ----------
 
     private fun refresh() {
+        // Si la categoría ya no existe (se eliminó), se vuelve a la por defecto.
+        if (CategoryStore.get(this, categoryId) == null) {
+            categoryId = CategoryStore.DEFAULT_ID
+            folderId = ""
+        }
+        if (viewMode != ViewMode.MODO_CARPETAS) folderId = ""
         if (folderId.isNotEmpty() && NoteStore.get(this, folderId) == null) folderId = ""
         items.clear()
-        items.addAll(NoteStore.children(this, folderId))
+        items.addAll(
+            when (viewMode) {
+                ViewMode.MODO_CARPETAS -> NoteStore.children(this, folderId, categoryId)
+                ViewMode.MODO_TODAS_LAS_NOTAS -> NoteStore.allNotes(this, categoryId)
+                ViewMode.MODO_FAVORITOS -> NoteStore.favorites(this)
+            }
+        )
         adapter.notifyDataSetChanged()
         buildCrumb()
+        drawerPanel.refresh()
     }
 
     private fun goUp() {
@@ -205,7 +269,14 @@ class MainActivity : Activity() {
     private fun buildCrumb() {
         crumb.removeAllViews()
         val ink = getColor(R.color.ink)
-        val r = UiKit.text(this, "Mis notas", 20, ink)
+        if (viewMode != ViewMode.MODO_CARPETAS) {
+            // Listas planas: solo el título del modo.
+            val t = if (viewMode == ViewMode.MODO_FAVORITOS) "Favoritos" else "Todas las notas"
+            crumb.addView(UiKit.text(this, t, 20, ink))
+            return
+        }
+        val catName = CategoryStore.get(this, categoryId)?.nombre ?: CategoryStore.DEFAULT_NAME
+        val r = UiKit.text(this, catName, 20, ink)
         r.setOnClickListener {
             folderId = ""
             refresh()
@@ -236,7 +307,7 @@ class MainActivity : Activity() {
         override fun isItemViewSwipeEnabled(): Boolean = false
 
         override fun getMovementFlags(rv: RecyclerView, vh: RecyclerView.ViewHolder): Int =
-            if (vh.itemViewType == 0) 0
+            if (vh.itemViewType == 0 || viewMode != ViewMode.MODO_CARPETAS) 0
             else makeMovementFlags(
                 ItemTouchHelper.UP or ItemTouchHelper.DOWN or ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT, 0
             )
@@ -282,9 +353,12 @@ class MainActivity : Activity() {
             val d = dragged
             dragged = null
             if (moved) {
-                OrderStore.set(this@MainActivity, folderId, items.map { it.id })
+                OrderStore.set(this@MainActivity, NoteStore.orderKey(folderId, categoryId), items.map { it.id })
             } else if (d != null && d.folder) {
                 FolderMenu.show(this@MainActivity, d, { pickIcon(d.id) }) { refresh() }
+            } else if (d != null) {
+                // Toque largo sin mover sobre una nota: sus opciones (favoritos, renombrar, eliminar).
+                options(d)
             }
         }
     }
@@ -337,7 +411,8 @@ class MainActivity : Activity() {
     }
 
     private fun newDocument() {
-        val d = NoteStore.add(this, folderId, false, null)
+        // En Favoritos la nota nueva nace favorita, para que aparezca en la lista.
+        val d = NoteStore.add(this, folderId, false, null, categoryId, viewMode == ViewMode.MODO_FAVORITOS)
         val i = Intent(this, EditorActivity::class.java)
         i.putExtra("id", d.id)
         i.putExtra("new", true)
@@ -346,7 +421,7 @@ class MainActivity : Activity() {
 
     private fun newFolder() {
         UiKit.askName(this, "Escribe un nombre de carpeta", "") { n ->
-            NoteStore.add(this, folderId, true, n)
+            NoteStore.add(this, folderId, true, n, categoryId)
             refresh()
         }
     }
@@ -362,6 +437,18 @@ class MainActivity : Activity() {
         title.setPadding(dp(14), dp(8), dp(14), dp(8))
         l.addView(title)
         val ref = DlgRef()
+        if (!it.folder) {
+            val fav = it.isFavorite
+            l.addView(
+                UiKit.sheetRow(
+                    this, if (fav) Icons.STAR_FILL else Icons.STAR5,
+                    if (fav) "Quitar de Favoritos" else "Añadir a Favoritos", ink, ref
+                ) {
+                    NoteStore.setFavorite(this, it.id, !fav)
+                    refresh()
+                }
+            )
+        }
         l.addView(UiKit.sheetRow(this, Icons.PENCIL, "Renombrar", ink, ref) {
             UiKit.askName(this, "Renombrar", it.name) { n ->
                 NoteStore.rename(this, it.id, n)
@@ -393,7 +480,7 @@ class MainActivity : Activity() {
         override fun getItemCount(): Int = items.size + off()
 
         override fun getItemViewType(position: Int): Int =
-            if (folderId.isNotEmpty() && position == 0) 0 else 1
+            if (hasBack() && position == 0) 0 else 1
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
             val v = if (viewType == 0) buildBack() else buildItem()
@@ -452,6 +539,11 @@ class MainActivity : Activity() {
                 }
             }
             h.itemView.setOnLongClickListener { _ ->
+                if (viewMode != ViewMode.MODO_CARPETAS) {
+                    // Listas planas: no se reordena; el toque largo abre las opciones de la nota.
+                    options(it)
+                    return@setOnLongClickListener true
+                }
                 moved = false
                 dragging = true
                 dragged = it
@@ -503,4 +595,16 @@ class MainActivity : Activity() {
         v.tag = w
         return v
     }
+}
+
+/** Modos de vista de la pantalla principal. */
+internal enum class ViewMode {
+    /** Carpetas y notas de la categoría actual (por defecto). */
+    MODO_CARPETAS,
+
+    /** Lista plana de todas las notas de la categoría actual. */
+    MODO_TODAS_LAS_NOTAS,
+
+    /** Lista plana de las notas favoritas (de todas las categorías). */
+    MODO_FAVORITOS
 }

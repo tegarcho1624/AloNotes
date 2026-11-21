@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Context
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -119,48 +120,95 @@ internal class SideDrawerLayout(ctx: Context, private val panelW: Int) : FrameLa
     }
 }
 
-/** Contenido del menú lateral. Por ahora todas las opciones muestran "Próximamente". */
-internal object DrawerPanel {
-    fun build(a: Activity, drawer: SideDrawerLayout): View {
-        fun dp(v: Number) = UiKit.dp(a, v)
-        val ink = a.getColor(R.color.ink)
-        val hi = ThemeUtils.accentHi(a)
-        val col = LinearLayout(a)
+/** Lo que el menú lateral necesita de la pantalla principal. */
+internal interface DrawerHost {
+    val currentCategoryId: String
+    val mode: ViewMode
+    fun onSelectCategory(id: String)
+    fun onSelectAll()
+    fun onSelectFavorites()
+
+    /** Se renombró o eliminó una categoría: hay que recargar la pantalla (y el título). */
+    fun onCategoriesChanged()
+}
+
+/**
+ * Contenido del menú lateral: Todas las notas, Favoritos, Papelera (próximamente) y la lista dinámica de categorías.
+ * Toque largo en una categoría: Renombrar y Eliminar (la categoría por defecto no se puede eliminar).
+ */
+internal class DrawerPanel(
+    private val a: Activity,
+    private val drawer: SideDrawerLayout,
+    private val host: DrawerHost
+) {
+    private val col = LinearLayout(a)
+    val view: View
+
+    private fun dp(v: Number) = UiKit.dp(a, v)
+
+    init {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(0, dp(16), 0, dp(24))
+        val bg = GradientDrawable()
+        bg.setColor(a.getColor(R.color.sf2))
+        val r = dp(18).toFloat()
+        bg.cornerRadii = floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
+        val sv = ScrollView(a)
+        sv.background = bg
+        sv.addView(col, ViewGroup.LayoutParams(-1, -2))
+        view = sv
+        refresh()
+    }
+
+    private fun item(
+        icon: Int, label: String, iconColor: Int, selected: Boolean,
+        onClick: () -> Unit, onLong: (() -> Unit)? = null
+    ) {
+        val ink = a.getColor(R.color.ink)
+        val r = LinearLayout(a)
+        r.gravity = Gravity.CENTER_VERTICAL
+        r.setPadding(dp(20), 0, dp(20), 0)
+        val iv = ImageView(a)
+        iv.setImageDrawable(Icons(icon, iconColor, false))
+        r.addView(iv, UiKit.box(a, 24))
+        val t = UiKit.text(a, label, 17, ink)
+        t.setSingleLine(true)
+        t.ellipsize = TextUtils.TruncateAt.END
+        val tp = LinearLayout.LayoutParams(0, -2, 1f)
+        tp.leftMargin = dp(18)
+        r.addView(t, tp)
+        if (selected) r.background = UiKit.rect(a, ThemeUtils.accentBg(a), 28)
+        else UiKit.ripple(a, r, 28, 0)
+        r.setOnClickListener {
+            drawer.close()
+            onClick()
+        }
+        if (onLong != null) r.setOnLongClickListener {
+            onLong()
+            true
+        }
+        val lp = LinearLayout.LayoutParams(-1, dp(56))
+        lp.setMargins(dp(10), dp(2), dp(10), dp(2))
+        col.addView(r, lp)
+    }
+
+    /** Vuelve a construir la lista (categorías, selección actual). */
+    fun refresh() {
+        col.removeAllViews()
+        val ink = a.getColor(R.color.ink)
+        val hi = ThemeUtils.accentHi(a)
+        val mode = host.mode
 
         val title = UiKit.text(a, "AloNotes", 26, ink)
         title.setPadding(dp(24), dp(14), dp(24), dp(14))
         col.addView(title)
 
-        fun item(icon: Int, label: String, iconColor: Int = ink, selected: Boolean = false, bold: Boolean = false) {
-            val r = LinearLayout(a)
-            r.gravity = Gravity.CENTER_VERTICAL
-            r.setPadding(dp(20), 0, dp(20), 0)
-            val iv = ImageView(a)
-            iv.setImageDrawable(Icons(icon, iconColor, false))
-            r.addView(iv, UiKit.box(a, 24))
-            val t = UiKit.text(a, label, 17, ink)
-            if (bold) t.setTypeface(t.typeface, Typeface.BOLD)
-            val tp = LinearLayout.LayoutParams(0, -2, 1f)
-            tp.leftMargin = dp(18)
-            r.addView(t, tp)
-            if (selected) r.background = UiKit.rect(a, ThemeUtils.accentBg(a), 28)
-            else UiKit.ripple(a, r, 28, 0)
-            r.setOnClickListener {
-                drawer.close()
-                UiKit.soon(a)
-            }
-            val lp = LinearLayout.LayoutParams(-1, dp(56))
-            lp.setMargins(dp(10), dp(2), dp(10), dp(2))
-            col.addView(r, lp)
-        }
-
-        item(Icons.NOTES, "Todas las notas")
-        item(Icons.FOLDER, "Sin categorizar")
+        val allSel = mode == ViewMode.MODO_TODAS_LAS_NOTAS
+        item(Icons.NOTES, "Todas las notas", if (allSel) hi else ink, allSel, { host.onSelectAll() })
         col.addView(View(a), LinearLayout.LayoutParams(-1, dp(12)))
-        item(Icons.STAR5, "Favoritos")
-        item(Icons.TRASH, "Papelera")
+        val favSel = mode == ViewMode.MODO_FAVORITOS
+        item(Icons.STAR5, "Favoritos", if (favSel) hi else ink, favSel, { host.onSelectFavorites() })
+        item(Icons.TRASH, "Papelera", ink, false, { UiKit.soon(a) })
 
         val line = View(a)
         line.setBackgroundColor(a.getColor(R.color.ln2))
@@ -185,16 +233,47 @@ internal object DrawerPanel {
         }
         col.addView(head, LinearLayout.LayoutParams(-1, dp(52)))
 
-        item(Icons.FOLDER, "Mis notas", hi, selected = true)
-        item(Icons.PLUS, "Nueva categoría")
+        // Lista dinámica de categorías
+        for (cat in CategoryStore.all(a)) {
+            val sel = mode == ViewMode.MODO_CARPETAS && cat.id == host.currentCategoryId
+            item(Icons.FOLDER, cat.nombre, if (sel) hi else ink, sel, { host.onSelectCategory(cat.id) }, { categoryOptions(cat) })
+        }
+        item(Icons.PLUS, "Nueva categoría", ink, false, { newCategory() })
+    }
 
-        val bg = GradientDrawable()
-        bg.setColor(a.getColor(R.color.sf2))
-        val r = dp(18).toFloat()
-        bg.cornerRadii = floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
-        val sv = ScrollView(a)
-        sv.background = bg
-        sv.addView(col, ViewGroup.LayoutParams(-1, -2))
-        return sv
+    private fun newCategory() {
+        UiKit.askName(a, "Nueva categoría", "") { n ->
+            val cat = CategoryStore.add(a, n)
+            host.onSelectCategory(cat.id)
+        }
+    }
+
+    private fun categoryOptions(cat: Category) {
+        val ink = a.getColor(R.color.ink)
+        val l = UiKit.vbox(a, 12)
+        val title = UiKit.text(a, cat.nombre, 17, ink)
+        title.setSingleLine(true)
+        title.ellipsize = TextUtils.TruncateAt.END
+        title.setPadding(dp(14), dp(8), dp(14), dp(8))
+        l.addView(title)
+        val ref = DlgRef()
+        l.addView(UiKit.sheetRow(a, Icons.PENCIL, "Renombrar", ink, ref) {
+            UiKit.askName(a, "Renombrar categoría", cat.nombre) { n ->
+                CategoryStore.rename(a, cat.id, n)
+                host.onCategoriesChanged()
+            }
+        })
+        if (!cat.esPorDefecto) {
+            l.addView(UiKit.sheetRow(a, Icons.CLOSE, "Eliminar", a.getColor(R.color.danger), ref) {
+                val defName = CategoryStore.get(a, CategoryStore.DEFAULT_ID)?.nombre ?: CategoryStore.DEFAULT_NAME
+                val msg = "¿Eliminar la categoría «" + cat.nombre + "»? Sus carpetas y notas pasarán a «" + defName + "»."
+                UiKit.confirm(a, msg, "Eliminar") {
+                    NoteStore.reassignCategory(a, cat.id, CategoryStore.DEFAULT_ID)
+                    CategoryStore.remove(a, cat.id)
+                    host.onCategoriesChanged()
+                }
+            })
+        }
+        ref.d = UiKit.show(a, l, true)
     }
 }
