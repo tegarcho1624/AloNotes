@@ -19,7 +19,6 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.abs
-import kotlin.math.hypot
 
 /**
  * Menú lateral deslizable. Se abre con el botón de tres rayas o deslizando de izquierda a derecha
@@ -140,8 +139,8 @@ internal interface DrawerHost {
  * Contenido del menú lateral, en un solo RecyclerView: encabezado (Todas las notas, Favoritos, Papelera, título de
  * Categorías), la lista dinámica de categorías y el pie "Nueva categoría".
  * Toque largo en una categoría: Renombrar y Eliminar (la de por defecto no se elimina).
- * Reordenar: se arrastra tocando y moviendo el ícono de carpeta (el toque largo queda para el menú). "Mis notas"
- * (la categoría por defecto) siempre es la primera: no se arrastra ni se puede soltar sobre ella.
+ * Reordenar: toque largo + arrastrar (como en la biblioteca); si se suelta sin mover, abre el menú de la categoría.
+ * "Mis notas" (la categoría por defecto) siempre es la primera: no se arrastra ni se puede soltar sobre ella.
  */
 internal class DrawerPanel(
     private val a: Activity,
@@ -157,9 +156,10 @@ internal class DrawerPanel(
     private val cats = ArrayList<Category>()
     private val rv = RecyclerView(a)
     private val adapter = DrawerAdapter()
-    private val slop = ViewConfiguration.get(a).scaledTouchSlop
     private lateinit var touch: ItemTouchHelper
     private var moved = false
+    private var dragging = false
+    private var dragged: Category? = null
     private var dragBg: Drawable? = null
 
     val view: View get() = rv
@@ -300,7 +300,7 @@ internal class DrawerPanel(
         return r
     }
 
-    /** Fila de una categoría. La zona del ícono de carpeta (salvo en la por defecto) permite arrastrar para reordenar. */
+    /** Fila de una categoría: tocar la abre; toque largo la arrastra (salvo la por defecto, que abre su menú). */
     private fun buildCategoryRow(h: DrawerVH, cat: Category): View {
         val ink = a.getColor(R.color.ink)
         val hi = ThemeUtils.accentHi(a)
@@ -328,52 +328,18 @@ internal class DrawerPanel(
             host.onSelectCategory(cat.id)
         }
         r.setOnLongClickListener {
-            categoryOptions(cat)
+            if (cat.esPorDefecto) {
+                categoryOptions(cat)
+            } else {
+                // Como en la biblioteca: empieza el arrastre; si se suelta sin mover, se abre el menú (ver clearView).
+                moved = false
+                dragging = true
+                dragged = cat
+                touch.startDrag(h)
+            }
             true
         }
-        if (!cat.esPorDefecto) attachDrag(zone, r, h)
         return r
-    }
-
-    /**
-     * Sobre la zona del ícono: un toque simple selecciona la categoría, mantener abre su menú y mover el dedo
-     * (arriba/abajo) empieza el arrastre. Así el arrastre no choca con el toque largo.
-     */
-    private fun attachDrag(zone: View, row: View, h: DrawerVH) {
-        var downX = 0f
-        var downY = 0f
-        var started = false
-        var longFired = false
-        val longRun = Runnable {
-            if (!started) {
-                longFired = true
-                row.performLongClick()
-            }
-        }
-        zone.setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX = e.rawX
-                    downY = e.rawY
-                    started = false
-                    longFired = false
-                    v.postDelayed(longRun, ViewConfiguration.getLongPressTimeout().toLong())
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    if (!started && !longFired && hypot(e.rawX - downX, e.rawY - downY) > slop) {
-                        started = true
-                        v.removeCallbacks(longRun)
-                        touch.startDrag(h)
-                    }
-                }
-                MotionEvent.ACTION_UP -> {
-                    v.removeCallbacks(longRun)
-                    if (!started && !longFired) row.performClick()
-                }
-                MotionEvent.ACTION_CANCEL -> v.removeCallbacks(longRun)
-            }
-            true
-        }
     }
 
     // ---------- Reordenar (ItemTouchHelper) ----------
@@ -428,10 +394,17 @@ internal class DrawerPanel(
                 if (bg != null) row.background = bg
             }
             dragBg = null
-            // Al soltar: se guarda el nuevo orden.
+            if (!dragging) return
+            dragging = false
+            val c = dragged
+            dragged = null
             if (moved) {
+                // Al soltar: se guarda el nuevo orden.
                 moved = false
                 CategoryStore.reorder(a, cats.map { it.id })
+            } else if (c != null) {
+                // Toque largo sin mover: opciones de la categoría.
+                categoryOptions(c)
             }
         }
     }

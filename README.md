@@ -160,8 +160,9 @@ el ícono del launcher (color fijo).
 
 ## Reordenar categorías (v0.9.1)
 - El menú lateral ahora es **un solo RecyclerView** (`DrawerPanel` en `SideDrawer.kt`): encabezado, categorías y pie "Nueva categoría".
-- Las categorías se reordenan con `ItemTouchHelper.SimpleCallback` (UP/DOWN, sin pulsación larga): se **toca y mueve el ícono de carpeta**.
-  Un toque simple selecciona; mantener abre Renombrar/Eliminar; mover el dedo empieza el arrastre.
+- Las categorías se reordenan con `ItemTouchHelper.SimpleCallback` (UP/DOWN): **toque largo + arrastrar** (como la biblioteca,
+  `startDrag` manual desde el toque largo). Si se suelta sin mover, se abre Renombrar/Eliminar. (v0.9.2: antes se intentó empezar
+  el arrastre moviendo el ícono de carpeta, pero no era fiable ni evidente.)
 - "Mis notas" (id `default`) siempre es la primera: no se arrastra ni se puede soltar sobre ella (`onMove`/`canDropOver`), aunque se renombre.
 - Al soltar se guarda el orden (`CategoryStore.reorder`, que además fuerza la por defecto primero). La fila arrastrada se muestra levantada (sombra).
 - No cambia: modos de vista, favoritos, capas ni trazos.
