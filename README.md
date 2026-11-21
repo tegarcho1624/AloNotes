@@ -138,6 +138,12 @@ el ícono del launcher (color fijo).
 - Al soltar se actualiza el orden, se redibuja la hoja y se guarda (trazos + capas), así el orden sobrevive al cerrar la app.
 - `PageLayers.move()` conserva la capa seleccionada. Sin dependencias nuevas (recyclerview ya estaba).
 
+## Ícono nuevo (v0.8.1)
+- Ícono del launcher: la "A" dorada estilizada sobre negro (diseño `Icono_AloNotes.png`). `res/drawable/ic_fg.xml` es ahora un **Vector Drawable**
+  (trazado de la A, relleno #E1B656, `evenOdd` para el hueco) escalado para caber en la zona segura de 66 dp; nítido en cualquier densidad.
+- El fondo es `@color/ic_bg`, ahora #000000 (antes #141414). `ic_launcher.xml` e `ic_launcher_round.xml` no cambiaron (mismos nombres).
+- La app usa el color fijo del ícono; no depende del acento dinámico.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

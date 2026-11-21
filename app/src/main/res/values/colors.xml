@@ -12,5 +12,5 @@
     <color name="paper">#EFE6D2</color>
     <color name="danger">#D9534F</color>
     <color name="scrim">#99000000</color>
-    <color name="ic_bg">#141414</color>
+    <color name="ic_bg">#000000</color>
 </resources>
