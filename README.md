@@ -131,6 +131,13 @@ el ícono del launcher (color fijo).
 - `Layer` ahora es `@Serializable` (su `canvas` es `@Transient`). Gradle: plugin `org.jetbrains.kotlin.plugin.serialization`
   1.9.24 y `kotlinx-serialization-json:1.6.3`. Al eliminar una nota también se borra su archivo de capas.
 
+## Fase 9 — Reordenar capas (v0.8.0)
+- La lista de capas del panel ahora es un **RecyclerView** (antes un ScrollView) con `ItemTouchHelper` (UP/DOWN), igual que la
+  biblioteca. El arrastre **solo empieza al tocar el ≡** de la fila (`startDrag` manual; sin pulsación larga en la fila).
+- La capa que queda arriba en la lista es la que se dibuja encima (el modelo va de abajo hacia arriba y la lista se muestra al revés).
+- Al soltar se actualiza el orden, se redibuja la hoja y se guarda (trazos + capas), así el orden sobrevive al cerrar la app.
+- `PageLayers.move()` conserva la capa seleccionada. Sin dependencias nuevas (recyclerview ya estaba).
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

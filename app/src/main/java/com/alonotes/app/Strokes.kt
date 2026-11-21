@@ -94,6 +94,14 @@ internal class PageLayers(first: List<Stroke>? = null) {
         return l
     }
 
+    /** Mueve una capa de la posición [from] a [to] (0 = la de abajo). La capa seleccionada sigue siendo la misma. */
+    fun move(from: Int, to: Int) {
+        if (from == to || from !in layers.indices || to !in layers.indices) return
+        val sel = layers[selected]
+        layers.add(to, layers.removeAt(from))
+        selected = layers.indexOfFirst { it === sel }
+    }
+
     /** Elimina la capa seleccionada. La última capa no se puede eliminar. */
     fun removeSelected(): Boolean {
         if (layers.size <= 1) return false

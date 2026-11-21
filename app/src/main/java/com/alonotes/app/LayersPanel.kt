@@ -18,6 +18,9 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Toast
 import android.widget.SeekBar
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.hypot
 
 /**
@@ -50,7 +53,10 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     private val full = LinearLayout(a)
     private val mini = FrameLayout(a)
     private val badge = UiKit.text(a, "1", 24, ThemeUtils.accentHi(a))
-    private val listBox = LinearLayout(a)
+    private val rv = RecyclerView(a)
+    private val adapter = LayerAdapter()
+    private lateinit var touch: ItemTouchHelper
+    private var moved = false
     private val pct = UiKit.text(a, "100%", 15, a.getColor(R.color.ink))
     private val slop = ViewConfiguration.get(a).scaledTouchSlop
     private var placed = false
@@ -148,11 +154,14 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         center.orientation = LinearLayout.VERTICAL
 
         // Lista de capas
-        listBox.orientation = LinearLayout.VERTICAL
-        listBox.setPadding(dp(6), dp(8), dp(6), dp(8))
-        val sv = ScrollView(a)
-        sv.addView(listBox, ViewGroup.LayoutParams(-1, -2))
-        center.addView(sv, LinearLayout.LayoutParams(-1, 0, 1f))
+        rv.layoutManager = LinearLayoutManager(a)
+        rv.adapter = adapter
+        rv.setPadding(dp(6), dp(8), dp(6), dp(8))
+        rv.clipToPadding = false
+        rv.overScrollMode = View.OVER_SCROLL_NEVER
+        touch = ItemTouchHelper(dragCallback())
+        touch.attachToRecyclerView(rv)
+        center.addView(rv, LinearLayout.LayoutParams(-1, 0, 1f))
 
         // Zona de fusión, justo encima de la opacidad
         val ink = a.getColor(R.color.ink)
@@ -203,17 +212,81 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     private fun soon() = UiKit.soon(a)
 
     private fun fillList() {
-        listBox.removeAllViews()
-        val m = model
         badge.text = layerCount.toString()
-        if (m == null) return
-        // La capa más alta arriba.
-        for (i in m.layers.indices.reversed()) {
-            listBox.addView(row(m.layers[i], i == m.selected) {
-                m.selected = i
-                fillList()
-                onLayersChanged?.invoke(false)
-            })
+        adapter.notifyDataSetChanged()
+    }
+
+    private fun select(idx: Int) {
+        val m = model ?: return
+        if (idx !in m.layers.indices) return
+        m.selected = idx
+        fillList()
+        onLayersChanged?.invoke(false)
+    }
+
+    // ---------- Lista (RecyclerView) y reordenar con el ícono ≡ ----------
+
+    /** La lista se muestra al revés: la capa más alta del modelo (la que se dibuja encima) va arriba. */
+    private inner class LayerAdapter : RecyclerView.Adapter<LayerVH>() {
+        override fun getItemCount(): Int = model?.layers?.size ?: 0
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): LayerVH {
+            val f = FrameLayout(a)
+            f.layoutParams = RecyclerView.LayoutParams(-1, dp(56))
+            return LayerVH(f)
+        }
+
+        override fun onBindViewHolder(h: LayerVH, position: Int) {
+            val m = model ?: return
+            val idx = m.layers.size - 1 - position
+            val ly = m.layers[idx]
+            val f = h.itemView as FrameLayout
+            f.removeAllViews()
+            f.alpha = 1f
+            f.addView(
+                row(ly, idx == m.selected, { idxOf(h).let { i -> if (i >= 0) select(i) } }, { touch.startDrag(h) }),
+                FrameLayout.LayoutParams(-1, dp(52))
+            )
+        }
+    }
+
+    /** Índice de capa (en el modelo) de la fila [h], o -1 si ya no está en la lista. */
+    private fun idxOf(h: LayerVH): Int {
+        val m = model ?: return -1
+        val p = h.bindingAdapterPosition
+        return if (p == RecyclerView.NO_POSITION) -1 else m.layers.size - 1 - p
+    }
+
+    /** Arrastrar arriba/abajo. Solo empieza al tocar el ≡ (startDrag manual), no con pulsación larga en la fila. */
+    private fun dragCallback() = object : ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0) {
+        override fun isLongPressDragEnabled(): Boolean = false
+
+        override fun onMove(r: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
+            val m = model ?: return false
+            val from = vh.bindingAdapterPosition
+            val to = target.bindingAdapterPosition
+            if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
+            m.move(m.layers.size - 1 - from, m.layers.size - 1 - to)
+            adapter.notifyItemMoved(from, to)
+            moved = true
+            return true
+        }
+
+        override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {}
+
+        override fun onSelectedChanged(vh: RecyclerView.ViewHolder?, actionState: Int) {
+            super.onSelectedChanged(vh, actionState)
+            if (actionState == ItemTouchHelper.ACTION_STATE_DRAG) vh?.itemView?.alpha = 0.85f
+        }
+
+        override fun clearView(r: RecyclerView, vh: RecyclerView.ViewHolder) {
+            super.clearView(r, vh)
+            vh.itemView.alpha = 1f
+            // Al soltar: redibuja (orden de apilado) y guarda el nuevo orden.
+            if (moved) {
+                moved = false
+                onLayersChanged?.invoke(true)
+            }
         }
     }
 
@@ -250,7 +323,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         onVisibilityChanged?.invoke()
     }
 
-    private fun row(ly: Layer, selected: Boolean, onSelect: () -> Unit): View {
+    private fun row(ly: Layer, selected: Boolean, onSelect: () -> Unit, onHandle: () -> Unit): View {
         val ink = a.getColor(R.color.ink)
         val r = LinearLayout(a)
         r.gravity = Gravity.CENTER_VERTICAL
@@ -268,10 +341,13 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         val tp = LinearLayout.LayoutParams(0, -2, 1f)
         tp.leftMargin = dp(4)
         r.addView(UiKit.text(a, ly.name, 15, if (ly.isVisible) ink else a.getColor(R.color.mut)), tp)
-        r.addView(UiKit.iconBtn(a, Icons.MENU, ink, 36, 20) { UiKit.soon(a) }, UiKit.box(a, 36))
-        val lp = LinearLayout.LayoutParams(-1, dp(52))
-        lp.bottomMargin = dp(4)
-        r.layoutParams = lp
+        // Asa de arrastre (≡): al tocarla empieza el arrastre de esta fila.
+        val handle = UiKit.iconBtn(a, Icons.MENU, ink, 36, 20)
+        handle.setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) onHandle()
+            false
+        }
+        r.addView(handle, UiKit.box(a, 36))
         r.setOnClickListener { onSelect() }
         return r
     }
@@ -419,3 +495,5 @@ private class Checker(private val ctx: Context) : View(ctx) {
         }
     }
 }
+
+private class LayerVH(v: View) : RecyclerView.ViewHolder(v)
