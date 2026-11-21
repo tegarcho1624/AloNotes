@@ -179,7 +179,9 @@ el ícono del launcher (color fijo).
 - **Recorte:** al dibujar la hoja (`PageView`), las imágenes se recortan con `clipRect` a los límites de la hoja; van debajo de los trazos de su capa
   y respetan visibilidad y opacidad de la capa.
 - **Guardado:** `layers/<idNota>.json` guarda por capa sus imágenes (archivo, rectángulo, rotación). Se borran con la nota.
-- El menú de 3 puntos de la barra de selección muestra "Próximamente".
+- El menú de 3 puntos muestra "Próximamente". (v0.10.1: ya no está en la barra superior; es un botón flotante que
+  aparece solo con un elemento seleccionado, a la izquierda del recuadro, y lo acompaña al mover, girar, redimensionar,
+  hacer zoom o desplazar la hoja.)
 
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)

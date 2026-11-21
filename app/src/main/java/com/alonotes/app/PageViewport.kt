@@ -55,6 +55,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 if (v != 4) selItem = null
             }
             field = v
+            updateMore()
             invalidate()
         }
     var strokes: DocStrokes? = null
@@ -65,6 +66,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Elemento seleccionado (herramienta Seleccionar). */
     private var selItem: SelectableItem? = null
+
+    /** Botón flotante de 3 puntos, anclado al lado izquierdo del recuadro de selección. */
+    private var more: View? = null
 
     private var specs: List<Spec> = emptyList()
     private var single: PageView? = null
@@ -195,6 +199,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             manip = 0
         }
         single?.invalidate()
+        updateMore()
         invalidate()
     }
 
@@ -206,6 +211,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         selItem = item
         manip = 0
         single?.invalidate()
+        updateMore()
         invalidate()
     }
 
@@ -257,6 +263,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             val v = pageAt(i)
             addView(v, LayoutParams((sp.wMm * k).roundToInt(), (sp.hMm * k).roundToInt(), Gravity.CENTER))
             single = v
+            attachMore()
         } else {
             val col = LinearLayout(context)
             col.orientation = LinearLayout.VERTICAL
@@ -355,6 +362,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             it.translationX = tx
             it.translationY = ty
         }
+        updateMore() // zoom, giro o desplazamiento de la vista: el botón acompaña al recuadro
     }
 
     private fun notifyPage() {
@@ -653,6 +661,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val hit = hitItem(p[0], p[1])
         selItem = hit
         if (hit != null) startManip(hit, M_MOVE, -1, p) // se selecciona y ya se puede arrastrar
+        updateMore()
         invalidate()
     }
 
@@ -686,6 +695,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
         }
         single?.invalidate()
+        updateMore() // el botón de 3 puntos sigue al recuadro
         invalidate()
     }
 
@@ -696,6 +706,68 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             mMoved = false
             onItemsChanged?.invoke()
         }
+    }
+
+    // ---------- Botón flotante de 3 puntos ----------
+
+    private fun createMore(): View {
+        val b = UiKit.iconBtn(context, Icons.DOTS_V, ThemeUtils.accentHi(context), 44, 22) { UiKit.soon(context) }
+        UiKit.ripple(context, b, 22, context.getColor(R.color.sf3))
+        b.elevation = 6f * d
+        b.visibility = INVISIBLE
+        return b
+    }
+
+    /** Pone el botón sobre la hoja (rebuild() quita todas las vistas del contenedor). */
+    private fun attachMore() {
+        val b = more ?: createMore().also { more = it }
+        if (b.parent == null) addView(b, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.START))
+    }
+
+    private fun hideMore(b: View) {
+        if (b.visibility != INVISIBLE) b.visibility = INVISIBLE
+    }
+
+    /**
+     * Visible solo con un elemento seleccionado. Se coloca a la izquierda del recuadro, centrado en su borde izquierdo
+     * (el tirador de la mitad izquierda), a 36 dp de él en la dirección "hacia afuera" del elemento, así que acompaña
+     * el giro, el tamaño, el zoom y el desplazamiento. Se mantiene dentro del contenedor.
+     */
+    private fun updateMore() {
+        val b = more ?: return
+        val item = selItem
+        if (item == null || tool != 4 || continuous || b.parent !== this) {
+            hideMore(b)
+            return
+        }
+        val pts = handlePts(item)
+        val c = pageToScreen(item.bounds.centerX(), item.bounds.centerY())
+        if (pts == null || c == null || width == 0 || height == 0) {
+            hideMore(b)
+            return
+        }
+        var ux = pts[6] - c[0] // del centro hacia el borde izquierdo (tirador 3)
+        var uy = pts[7] - c[1]
+        val n = hypot(ux, uy)
+        if (n < 1e-3f) {
+            ux = -1f
+            uy = 0f
+        } else {
+            ux /= n
+            uy /= n
+        }
+        val half = 22f * d
+        val gap = half + 14f * d
+        val bx = (pts[6] + ux * gap).coerceIn(half, max(half, width - half))
+        val by = (pts[7] + uy * gap).coerceIn(half, max(half, height - half))
+        b.x = bx - half
+        b.y = by - half
+        if (b.visibility != VISIBLE) b.visibility = VISIBLE
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, bt: Int) {
+        super.onLayout(changed, l, t, r, bt)
+        updateMore()
     }
 
     override fun dispatchDraw(canvas: Canvas) {

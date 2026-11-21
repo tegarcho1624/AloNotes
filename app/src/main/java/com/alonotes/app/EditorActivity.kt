@@ -214,9 +214,6 @@ class EditorActivity : Activity() {
             PenOptions.buildEraser(this, bar) { buildBar() }
         } else if (tool == 3 && !cont) {
             PenOptions.buildHighlighter(this, bar) { buildBar() }
-        } else if (tool == 4 && !cont) {
-            // Barra de selección: menú de 3 puntos (por ahora solo "Próximamente")
-            bar.addView(tb(Icons.DOTS_V, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
         } else {
             // Flechas de página: anterior / siguiente
             bar.addView(tb(Icons.UNDO, ink) { viewport.prevPage() }, UiKit.box(this, 44))
