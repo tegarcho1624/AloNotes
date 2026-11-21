@@ -233,7 +233,6 @@ internal object NoteStore {
         save(c, all.filter { !gone.contains(it.id) })
     }
 
-    @Synchronized
     /** Mueve una hoja de la posición [from] a [to] (0 = la primera). Los trazos y capas se reordenan aparte. */
     @Synchronized
     fun movePage(c: Context, id: String, from: Int, to: Int) {
@@ -251,6 +250,7 @@ internal object NoteStore {
         save(c, all)
     }
 
+    @Synchronized
     fun addPages(c: Context, id: String, n: Int, dim: String, landscape: Boolean, bg: Int) {
         val all = load(c)
         for (item in all) {
