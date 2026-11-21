@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.app.Activity
 import android.content.Context
 import android.graphics.Typeface
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.text.TextUtils
 import android.view.Gravity
@@ -14,8 +15,11 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.abs
+import kotlin.math.hypot
 
 /**
  * Menú lateral deslizable. Se abre con el botón de tres rayas o deslizando de izquierda a derecha
@@ -133,82 +137,120 @@ internal interface DrawerHost {
 }
 
 /**
- * Contenido del menú lateral: Todas las notas, Favoritos, Papelera (próximamente) y la lista dinámica de categorías.
- * Toque largo en una categoría: Renombrar y Eliminar (la categoría por defecto no se puede eliminar).
+ * Contenido del menú lateral, en un solo RecyclerView: encabezado (Todas las notas, Favoritos, Papelera, título de
+ * Categorías), la lista dinámica de categorías y el pie "Nueva categoría".
+ * Toque largo en una categoría: Renombrar y Eliminar (la de por defecto no se elimina).
+ * Reordenar: se arrastra tocando y moviendo el ícono de carpeta (el toque largo queda para el menú). "Mis notas"
+ * (la categoría por defecto) siempre es la primera: no se arrastra ni se puede soltar sobre ella.
  */
 internal class DrawerPanel(
     private val a: Activity,
     private val drawer: SideDrawerLayout,
     private val host: DrawerHost
 ) {
-    private val col = LinearLayout(a)
-    val view: View
+    private companion object {
+        const val T_HEADER = 0
+        const val T_CAT = 1
+        const val T_FOOTER = 2
+    }
+
+    private val cats = ArrayList<Category>()
+    private val rv = RecyclerView(a)
+    private val adapter = DrawerAdapter()
+    private val slop = ViewConfiguration.get(a).scaledTouchSlop
+    private lateinit var touch: ItemTouchHelper
+    private var moved = false
+    private var dragBg: Drawable? = null
+
+    val view: View get() = rv
 
     private fun dp(v: Number) = UiKit.dp(a, v)
 
     init {
-        col.orientation = LinearLayout.VERTICAL
-        col.setPadding(0, dp(16), 0, dp(24))
         val bg = GradientDrawable()
         bg.setColor(a.getColor(R.color.sf2))
         val r = dp(18).toFloat()
         bg.cornerRadii = floatArrayOf(0f, 0f, r, r, r, r, 0f, 0f)
-        val sv = ScrollView(a)
-        sv.background = bg
-        sv.addView(col, ViewGroup.LayoutParams(-1, -2))
-        view = sv
+        rv.background = bg
+        rv.layoutManager = LinearLayoutManager(a)
+        rv.adapter = adapter
+        rv.setPadding(0, dp(16), 0, dp(24))
+        rv.clipToPadding = false
+        rv.overScrollMode = View.OVER_SCROLL_NEVER
+        touch = ItemTouchHelper(dragCallback())
+        touch.attachToRecyclerView(rv)
         refresh()
-    }
-
-    private fun item(
-        icon: Int, label: String, iconColor: Int, selected: Boolean,
-        onClick: () -> Unit, onLong: (() -> Unit)? = null
-    ) {
-        val ink = a.getColor(R.color.ink)
-        val r = LinearLayout(a)
-        r.gravity = Gravity.CENTER_VERTICAL
-        r.setPadding(dp(20), 0, dp(20), 0)
-        val iv = ImageView(a)
-        iv.setImageDrawable(Icons(icon, iconColor, false))
-        r.addView(iv, UiKit.box(a, 24))
-        val t = UiKit.text(a, label, 17, ink)
-        t.setSingleLine(true)
-        t.ellipsize = TextUtils.TruncateAt.END
-        val tp = LinearLayout.LayoutParams(0, -2, 1f)
-        tp.leftMargin = dp(18)
-        r.addView(t, tp)
-        if (selected) r.background = UiKit.rect(a, ThemeUtils.accentBg(a), 28)
-        else UiKit.ripple(a, r, 28, 0)
-        r.setOnClickListener {
-            drawer.close()
-            onClick()
-        }
-        if (onLong != null) r.setOnLongClickListener {
-            onLong()
-            true
-        }
-        val lp = LinearLayout.LayoutParams(-1, dp(56))
-        lp.setMargins(dp(10), dp(2), dp(10), dp(2))
-        col.addView(r, lp)
     }
 
     /** Vuelve a construir la lista (categorías, selección actual). */
     fun refresh() {
-        col.removeAllViews()
+        cats.clear()
+        cats.addAll(CategoryStore.all(a))
+        adapter.notifyDataSetChanged()
+    }
+
+    // ---------- Lista ----------
+
+    private inner class DrawerAdapter : RecyclerView.Adapter<DrawerVH>() {
+        override fun getItemCount(): Int = cats.size + 2
+
+        override fun getItemViewType(position: Int): Int = when (position) {
+            0 -> T_HEADER
+            cats.size + 1 -> T_FOOTER
+            else -> T_CAT
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): DrawerVH {
+            val f = FrameLayout(a)
+            f.clipChildren = false
+            f.clipToPadding = false
+            f.layoutParams = RecyclerView.LayoutParams(-1, -2)
+            return DrawerVH(f)
+        }
+
+        override fun onBindViewHolder(h: DrawerVH, position: Int) {
+            val f = h.itemView as FrameLayout
+            f.removeAllViews()
+            when (getItemViewType(position)) {
+                T_HEADER -> f.addView(buildHeader(), FrameLayout.LayoutParams(-1, -2))
+                T_FOOTER -> {
+                    f.setPadding(dp(10), dp(2), dp(10), dp(2))
+                    f.addView(
+                        plainItem(Icons.PLUS, "Nueva categoría", a.getColor(R.color.ink), false) { newCategory() },
+                        FrameLayout.LayoutParams(-1, dp(56))
+                    )
+                }
+                else -> {
+                    f.setPadding(dp(10), dp(2), dp(10), dp(2))
+                    f.addView(buildCategoryRow(h, cats[position - 1]), FrameLayout.LayoutParams(-1, dp(56)))
+                }
+            }
+        }
+    }
+
+    private fun buildHeader(): View {
         val ink = a.getColor(R.color.ink)
         val hi = ThemeUtils.accentHi(a)
         val mode = host.mode
+        val col = LinearLayout(a)
+        col.orientation = LinearLayout.VERTICAL
+
+        fun add(v: View) {
+            val lp = LinearLayout.LayoutParams(-1, dp(56))
+            lp.setMargins(dp(10), dp(2), dp(10), dp(2))
+            col.addView(v, lp)
+        }
 
         val title = UiKit.text(a, "AloNotes", 26, ink)
         title.setPadding(dp(24), dp(14), dp(24), dp(14))
         col.addView(title)
 
         val allSel = mode == ViewMode.MODO_TODAS_LAS_NOTAS
-        item(Icons.NOTES, "Todas las notas", if (allSel) hi else ink, allSel, { host.onSelectAll() })
+        add(plainItem(Icons.NOTES, "Todas las notas", if (allSel) hi else ink, allSel) { host.onSelectAll() })
         col.addView(View(a), LinearLayout.LayoutParams(-1, dp(12)))
         val favSel = mode == ViewMode.MODO_FAVORITOS
-        item(Icons.STAR5, "Favoritos", if (favSel) hi else ink, favSel, { host.onSelectFavorites() })
-        item(Icons.TRASH, "Papelera", ink, false, { UiKit.soon(a) })
+        add(plainItem(Icons.STAR5, "Favoritos", if (favSel) hi else ink, favSel) { host.onSelectFavorites() })
+        add(plainItem(Icons.TRASH, "Papelera", ink, false) { UiKit.soon(a) })
 
         val line = View(a)
         line.setBackgroundColor(a.getColor(R.color.ln2))
@@ -232,14 +274,169 @@ internal class DrawerPanel(
             UiKit.soon(a)
         }
         col.addView(head, LinearLayout.LayoutParams(-1, dp(52)))
-
-        // Lista dinámica de categorías
-        for (cat in CategoryStore.all(a)) {
-            val sel = mode == ViewMode.MODO_CARPETAS && cat.id == host.currentCategoryId
-            item(Icons.FOLDER, cat.nombre, if (sel) hi else ink, sel, { host.onSelectCategory(cat.id) }, { categoryOptions(cat) })
-        }
-        item(Icons.PLUS, "Nueva categoría", ink, false, { newCategory() })
+        return col
     }
+
+    /** Fila simple del menú (ícono, texto). Al tocarla se cierra el menú y se ejecuta [onClick]. */
+    private fun plainItem(icon: Int, label: String, iconColor: Int, selected: Boolean, onClick: () -> Unit): LinearLayout {
+        val r = LinearLayout(a)
+        r.gravity = Gravity.CENTER_VERTICAL
+        r.setPadding(dp(20), 0, dp(20), 0)
+        val iv = ImageView(a)
+        iv.setImageDrawable(Icons(icon, iconColor, false))
+        r.addView(iv, UiKit.box(a, 24))
+        val t = UiKit.text(a, label, 17, a.getColor(R.color.ink))
+        t.setSingleLine(true)
+        t.ellipsize = TextUtils.TruncateAt.END
+        val tp = LinearLayout.LayoutParams(0, -2, 1f)
+        tp.leftMargin = dp(18)
+        r.addView(t, tp)
+        if (selected) r.background = UiKit.rect(a, ThemeUtils.accentBg(a), 28)
+        else UiKit.ripple(a, r, 28, 0)
+        r.setOnClickListener {
+            drawer.close()
+            onClick()
+        }
+        return r
+    }
+
+    /** Fila de una categoría. La zona del ícono de carpeta (salvo en la por defecto) permite arrastrar para reordenar. */
+    private fun buildCategoryRow(h: DrawerVH, cat: Category): View {
+        val ink = a.getColor(R.color.ink)
+        val hi = ThemeUtils.accentHi(a)
+        val sel = host.mode == ViewMode.MODO_CARPETAS && cat.id == host.currentCategoryId
+        val r = LinearLayout(a)
+        r.gravity = Gravity.CENTER_VERTICAL
+        r.setPadding(0, 0, dp(20), 0)
+        val zone = FrameLayout(a)
+        val iv = ImageView(a)
+        iv.setImageDrawable(Icons(Icons.FOLDER, if (sel) hi else ink, false))
+        val ip = FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER_VERTICAL or Gravity.START)
+        ip.leftMargin = dp(20)
+        zone.addView(iv, ip)
+        r.addView(zone, LinearLayout.LayoutParams(dp(52), -1))
+        val t = UiKit.text(a, cat.nombre, 17, ink)
+        t.setSingleLine(true)
+        t.ellipsize = TextUtils.TruncateAt.END
+        val tp = LinearLayout.LayoutParams(0, -2, 1f)
+        tp.leftMargin = dp(10)
+        r.addView(t, tp)
+        if (sel) r.background = UiKit.rect(a, ThemeUtils.accentBg(a), 28)
+        else UiKit.ripple(a, r, 28, 0)
+        r.setOnClickListener {
+            drawer.close()
+            host.onSelectCategory(cat.id)
+        }
+        r.setOnLongClickListener {
+            categoryOptions(cat)
+            true
+        }
+        if (!cat.esPorDefecto) attachDrag(zone, r, h)
+        return r
+    }
+
+    /**
+     * Sobre la zona del ícono: un toque simple selecciona la categoría, mantener abre su menú y mover el dedo
+     * (arriba/abajo) empieza el arrastre. Así el arrastre no choca con el toque largo.
+     */
+    private fun attachDrag(zone: View, row: View, h: DrawerVH) {
+        var downX = 0f
+        var downY = 0f
+        var started = false
+        var longFired = false
+        val longRun = Runnable {
+            if (!started) {
+                longFired = true
+                row.performLongClick()
+            }
+        }
+        zone.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX
+                    downY = e.rawY
+                    started = false
+                    longFired = false
+                    v.postDelayed(longRun, ViewConfiguration.getLongPressTimeout().toLong())
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (!started && !longFired && hypot(e.rawX - downX, e.rawY - downY) > slop) {
+                        started = true
+                        v.removeCallbacks(longRun)
+                        touch.startDrag(h)
+                    }
+                }
+                MotionEvent.ACTION_UP -> {
+                    v.removeCallbacks(longRun)
+                    if (!started && !longFired) row.performClick()
+                }
+                MotionEvent.ACTION_CANCEL -> v.removeCallbacks(longRun)
+            }
+            true
+        }
+    }
+
+    // ---------- Reordenar (ItemTouchHelper) ----------
+
+    /** Posición de la categoría en la lista de datos (0 = "Mis notas"), o -1 si la fila no es una categoría. */
+    private fun catIndex(vh: RecyclerView.ViewHolder): Int {
+        if (vh.itemViewType != T_CAT) return -1
+        val p = vh.bindingAdapterPosition
+        return if (p == RecyclerView.NO_POSITION) -1 else p - 1
+    }
+
+    private fun dragCallback() = object : ItemTouchHelper.SimpleCallback(ItemTouchHelper.UP or ItemTouchHelper.DOWN, 0) {
+        override fun isLongPressDragEnabled(): Boolean = false
+        override fun isItemViewSwipeEnabled(): Boolean = false
+
+        // Solo se pueden arrastrar las categorías que no son la primera ("Mis notas", por defecto).
+        override fun getDragDirs(r: RecyclerView, vh: RecyclerView.ViewHolder): Int =
+            if (catIndex(vh) > 0) super.getDragDirs(r, vh) else 0
+
+        override fun canDropOver(r: RecyclerView, current: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean =
+            catIndex(target) > 0
+
+        override fun onMove(r: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
+            val from = catIndex(vh)
+            val to = catIndex(target)
+            // La posición 0 es de "Mis notas": ni sale de ahí ni nada se coloca encima.
+            if (from <= 0 || to <= 0) return false
+            cats.add(to, cats.removeAt(from))
+            adapter.notifyItemMoved(vh.bindingAdapterPosition, target.bindingAdapterPosition)
+            moved = true
+            return true
+        }
+
+        override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {}
+
+        override fun onSelectedChanged(vh: RecyclerView.ViewHolder?, state: Int) {
+            super.onSelectedChanged(vh, state)
+            if (state != ItemTouchHelper.ACTION_STATE_DRAG) return
+            // Fila "levantada": fondo propio y sombra.
+            val row = (vh?.itemView as? FrameLayout)?.getChildAt(0) ?: return
+            dragBg = row.background
+            row.background = UiKit.rect(a, a.getColor(R.color.sf3), 28)
+            row.elevation = dp(12).toFloat()
+        }
+
+        override fun clearView(r: RecyclerView, vh: RecyclerView.ViewHolder) {
+            super.clearView(r, vh)
+            val row = (vh.itemView as? FrameLayout)?.getChildAt(0)
+            if (row != null) {
+                row.elevation = 0f
+                val bg = dragBg
+                if (bg != null) row.background = bg
+            }
+            dragBg = null
+            // Al soltar: se guarda el nuevo orden.
+            if (moved) {
+                moved = false
+                CategoryStore.reorder(a, cats.map { it.id })
+            }
+        }
+    }
+
+    // ---------- Acciones ----------
 
     private fun newCategory() {
         UiKit.askName(a, "Nueva categoría", "") { n ->
@@ -277,3 +474,5 @@ internal class DrawerPanel(
         ref.d = UiKit.show(a, l, true)
     }
 }
+
+private class DrawerVH(v: View) : RecyclerView.ViewHolder(v)

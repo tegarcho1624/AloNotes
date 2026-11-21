@@ -158,6 +158,14 @@ el ícono del launcher (color fijo).
 - **Botón +:** en carpetas abre el menú de siempre; en listas planas crea una nota directamente (en Favoritos nace favorita).
 - El orden manual de la raíz se guarda por categoría (la de por defecto conserva la clave de antes). Capas y trazos no cambian.
 
+## Reordenar categorías (v0.9.1)
+- El menú lateral ahora es **un solo RecyclerView** (`DrawerPanel` en `SideDrawer.kt`): encabezado, categorías y pie "Nueva categoría".
+- Las categorías se reordenan con `ItemTouchHelper.SimpleCallback` (UP/DOWN, sin pulsación larga): se **toca y mueve el ícono de carpeta**.
+  Un toque simple selecciona; mantener abre Renombrar/Eliminar; mover el dedo empieza el arrastre.
+- "Mis notas" (id `default`) siempre es la primera: no se arrastra ni se puede soltar sobre ella (`onMove`/`canDropOver`), aunque se renombre.
+- Al soltar se guarda el orden (`CategoryStore.reorder`, que además fuerza la por defecto primero). La fila arrastrada se muestra levantada (sombra).
+- No cambia: modos de vista, favoritos, capas ni trazos.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

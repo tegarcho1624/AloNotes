@@ -69,6 +69,21 @@ internal object CategoryStore {
         write(c, all(c).map { if (it.id == id) it.copy(nombre = nm) else it })
     }
 
+    /** Guarda el orden de las categorías. La por defecto queda siempre primera, aunque se la renombre. */
+    @Synchronized
+    fun reorder(c: Context, ids: List<String>) {
+        val cur = all(c)
+        val byId = cur.associateBy { it.id }
+        val out = ArrayList<Category>()
+        byId[DEFAULT_ID]?.let { out.add(it) }
+        for (id in ids) {
+            val x = byId[id]
+            if (x != null && out.none { it.id == id }) out.add(x)
+        }
+        for (x in cur) if (out.none { it.id == x.id }) out.add(x)
+        write(c, out)
+    }
+
     /** Elimina una categoría (nunca la por defecto). Mover antes sus notas con NoteStore.reassignCategory. */
     @Synchronized
     fun remove(c: Context, id: String): Boolean {
