@@ -2,11 +2,13 @@ package com.alonotes.app
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Bitmap.CompressFormat
 import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Handler
 import android.os.Looper
 import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -123,11 +125,12 @@ internal object Xf {
 /** Imagen colocada en una hoja. El archivo está en filesDir/images/<idNota>/; el bitmap se carga al dibujarla. */
 internal class ImageItem(
     override val id: String,
-    val file: File,
+    /** Archivo de la imagen; cambia cuando se recorta (se guarda uno nuevo). */
+    var file: File,
     override val bounds: RectF,
     override var rotation: Float,
-    /** Ancho (mm) con el que se insertó, para calcular [scale]. */
-    val baseW: Float,
+    /** Ancho (mm) con el que se insertó (o se recortó), para calcular [scale]. */
+    var baseW: Float,
     override var isFlippedH: Boolean = false,
     override var isFlippedV: Boolean = false,
     override var opacity: Float = 1f
@@ -182,5 +185,21 @@ internal class ImageItem(
                 invalidate()
             }
         }.start()
+    }
+}
+
+/** Escritura de bitmaps de imágenes (PNG si tienen transparencia, JPEG si no). */
+internal object ImageFiles {
+    /** Guarda [bm] como <id>.png o <id>.jpg dentro de [dir]. Devuelve el archivo o null si no se pudo escribir. */
+    fun write(bm: Bitmap, dir: File, id: String): File? {
+        val png = bm.hasAlpha()
+        val f = File(dir, id + if (png) ".png" else ".jpg")
+        return try {
+            dir.mkdirs()
+            val ok = FileOutputStream(f).use { bm.compress(if (png) CompressFormat.PNG else CompressFormat.JPEG, 92, it) }
+            if (ok) f else null
+        } catch (e: Exception) {
+            null
+        }
     }
 }

@@ -2,6 +2,7 @@ package com.alonotes.app
 
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
@@ -58,7 +59,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             if (v != field) {
                 cancelStroke()
                 endManip()
-                if (v != 4) selItem = null
+                if (v != 4) {
+                    cancelCrop()
+                    selItem = null
+                }
             }
             field = v
             updateMore()
@@ -72,6 +76,13 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Elemento seleccionado (herramienta Seleccionar). */
     private var selItem: SelectableItem? = null
+
+    // Modo recorte: el recuadro pasa a ser la ventana de recorte; la imagen se mueve por debajo.
+    private var cropMode = false
+    private var cropImg: ImageItem? = null
+    private val cropB = RectF() // ventana de recorte (mm de la hoja, con el giro de la imagen)
+    private val cropOrig = RectF() // posición de la imagen al entrar (para cancelar)
+    private var cropBar: View? = null
 
     /** Botón flotante de 3 puntos, anclado al lado izquierdo del recuadro de selección. */
     private var more: View? = null
@@ -148,6 +159,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         const val M_MOVE = 1
         const val M_RESIZE = 2
         const val M_ROTATE = 3
+        const val M_CROP_RESIZE = 4
+        const val M_CROP_MOVE = 5
 
         // Tiradores: 0 sup-izq, 1 sup, 2 sup-der, 3 izq, 4 der, 5 inf-izq, 6 inf, 7 inf-der (8 = círculo de giro).
         val HX = intArrayOf(-1, 0, 1, -1, 1, -1, 0, 1)
@@ -170,6 +183,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     fun setPages(list: List<Spec>) {
         cancelStroke()
         endManip()
+        cancelCrop()
         selItem = null
         specs = list
         index = index.coerceIn(0, max(0, list.size - 1))
@@ -201,6 +215,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     fun refreshPage() {
         val s = selItem
         if (s != null && !itemExists(s)) {
+            cancelCrop()
             selItem = null
             manip = 0
         }
@@ -214,6 +229,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Selecciona un elemento de la hoja actual (null = quitar la selección). */
     fun selectItem(item: SelectableItem?) {
+        cancelCrop()
         selItem = item
         manip = 0
         single?.invalidate()
@@ -270,6 +286,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             addView(v, LayoutParams((sp.wMm * k).roundToInt(), (sp.hMm * k).roundToInt(), Gravity.CENTER))
             single = v
             attachMore()
+            attachCropBar()
         } else {
             val col = LinearLayout(context)
             col.orientation = LinearLayout.VERTICAL
@@ -595,13 +612,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
      * Posición en pantalla de los 9 tiradores (x, y por cada uno): los 8 del recuadro (ver HX/HY) y el círculo de giro,
      * que está sobre el borde superior, a 32 dp hacia "arriba" del elemento.
      */
-    private fun handlePts(item: SelectableItem): FloatArray? {
-        val b = item.bounds
+    private fun handlePts(item: SelectableItem): FloatArray? = handlePtsFor(item.bounds, item.rotation)
+
+    private fun handlePtsFor(b: RectF, rot: Float): FloatArray? {
         val w = b.width()
         val h = b.height()
         val out = FloatArray(18)
         for (i in 0 until 8) {
-            val p = Xf.toPage(b.centerX(), b.centerY(), item.rotation, HX[i] * w / 2f, HY[i] * h / 2f)
+            val p = Xf.toPage(b.centerX(), b.centerY(), rot, HX[i] * w / 2f, HY[i] * h / 2f)
             val s = pageToScreen(p[0], p[1]) ?: return null
             out[i * 2] = s[0]
             out[i * 2 + 1] = s[1]
@@ -623,8 +641,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     }
 
     /** Índice del tirador tocado (0..7, 8 = giro) o -1. El círculo de giro tiene prioridad. */
-    private fun hitHandle(pts: FloatArray, x: Float, y: Float): Int {
-        if (hypot(x - pts[16], y - pts[17]) <= 26f * d) return 8
+    private fun hitHandle(pts: FloatArray, x: Float, y: Float, rotate: Boolean = true): Int {
+        if (rotate && hypot(x - pts[16], y - pts[17]) <= 26f * d) return 8
         var best = -1
         var bd = 22f * d
         for (i in 0 until 8) {
@@ -651,6 +669,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun beginSelect(e: MotionEvent, stylus: Boolean) {
         if (!stylus && e.eventTime - lastStylusT < 1500) return // palma
         val p = toPage(e.x, e.y) ?: return
+        if (cropMode) {
+            beginCrop(e, p)
+            return
+        }
         val sel = selItem
         if (sel != null) {
             val pts = handlePts(sel)
@@ -699,6 +721,17 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 val ang = Xf.angleDeg(p[0] - mB0.centerX(), p[1] - mB0.centerY())
                 item.rotation = Xf.normalize(mRot0 + (ang - mAng0))
             }
+            M_CROP_RESIZE -> {
+                // Se redimensiona la ventana, no la imagen. La ventana no puede salirse de la imagen.
+                Xf.resize(mB0, mRot0, HX[mHandle], HY[mHandle], p[0], p[1], false, cropB)
+                cropImg?.let { clampWindowToImage(it) }
+            }
+            M_CROP_MOVE -> {
+                // La ventana queda quieta y la imagen se desliza por debajo (sin dejar la ventana fuera de la imagen).
+                item.bounds.set(mB0)
+                item.bounds.offset(p[0] - mP0x, p[1] - mP0y)
+                cropImg?.let { clampImageOverWindow(it) }
+            }
         }
         single?.invalidate()
         updateMore() // el botón de 3 puntos sigue al recuadro
@@ -710,8 +743,239 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         manip = 0
         if (mMoved) {
             mMoved = false
-            onItemsChanged?.invoke()
+            // En el modo recorte no se guarda nada hasta confirmar.
+            if (!cropMode) onItemsChanged?.invoke()
         }
+    }
+
+    // ---------- Modo recorte ----------
+
+    private fun beginCrop(e: MotionEvent, p: FloatArray) {
+        val img = cropImg ?: return
+        val pts = handlePtsFor(cropB, img.rotation)
+        val h = if (pts != null) hitHandle(pts, e.x, e.y, false) else -1
+        if (h >= 0) {
+            startCropManip(M_CROP_RESIZE, h, p, cropB)
+            return
+        }
+        val l = Xf.toLocal(cropB.centerX(), cropB.centerY(), img.rotation, p[0], p[1])
+        if (kotlin.math.abs(l[0]) <= cropB.width() / 2f && kotlin.math.abs(l[1]) <= cropB.height() / 2f) {
+            startCropManip(M_CROP_MOVE, -1, p, img.bounds)
+        }
+    }
+
+    private fun startCropManip(kind: Int, handle: Int, p: FloatArray, from: RectF) {
+        val img = cropImg ?: return
+        manip = kind
+        mHandle = handle
+        mP0x = p[0]
+        mP0y = p[1]
+        mB0.set(from)
+        mRot0 = img.rotation
+        mMoved = false
+        invalidate()
+    }
+
+    /** Mantiene la ventana dentro del rectángulo de la imagen (en los ejes de la imagen). */
+    private fun clampWindowToImage(img: ImageItem) {
+        val b = img.bounds
+        val th = img.rotation
+        val bw = b.width()
+        val bh = b.height()
+        val l = Xf.toLocal(b.centerX(), b.centerY(), th, cropB.centerX(), cropB.centerY())
+        var left = l[0] - cropB.width() / 2f
+        var right = l[0] + cropB.width() / 2f
+        var top = l[1] - cropB.height() / 2f
+        var bottom = l[1] + cropB.height() / 2f
+        left = max(left, -bw / 2f)
+        right = min(right, bw / 2f)
+        top = max(top, -bh / 2f)
+        bottom = min(bottom, bh / 2f)
+        if (right - left < Xf.MIN_MM) right = min(bw / 2f, left + Xf.MIN_MM)
+        if (bottom - top < Xf.MIN_MM) bottom = min(bh / 2f, top + Xf.MIN_MM)
+        val c = Xf.toPage(b.centerX(), b.centerY(), th, (left + right) / 2f, (top + bottom) / 2f)
+        val hw = (right - left) / 2f
+        val hh = (bottom - top) / 2f
+        cropB.set(c[0] - hw, c[1] - hh, c[0] + hw, c[1] + hh)
+    }
+
+    /** Después de mover la imagen: la imagen debe seguir cubriendo toda la ventana. */
+    private fun clampImageOverWindow(img: ImageItem) {
+        val b = img.bounds
+        val bw = b.width()
+        val bh = b.height()
+        val th = img.rotation
+        val l = Xf.toLocal(b.centerX(), b.centerY(), th, cropB.centerX(), cropB.centerY())
+        val mx = max(0f, bw / 2f - cropB.width() / 2f)
+        val my = max(0f, bh / 2f - cropB.height() / 2f)
+        val lx = l[0].coerceIn(-mx, mx)
+        val ly = l[1].coerceIn(-my, my)
+        // centro de la imagen = centro de la ventana − R(θ)·(lx, ly)
+        val r = Xf.rotate(lx, ly, th)
+        val cx = cropB.centerX() - r[0]
+        val cy = cropB.centerY() - r[1]
+        b.set(cx - bw / 2f, cy - bh / 2f, cx + bw / 2f, cy + bh / 2f)
+    }
+
+    private fun enterCrop() {
+        val img = selItem as? ImageItem ?: return
+        if (img.bitmap == null) {
+            Toast.makeText(context, "La imagen aún se está cargando", Toast.LENGTH_SHORT).show()
+            return
+        }
+        cropMode = true
+        cropImg = img
+        cropOrig.set(img.bounds)
+        cropB.set(img.bounds)
+        manip = 0
+        updateCropBar()
+        updateMore()
+        invalidate()
+    }
+
+    private fun leaveCrop() {
+        cropMode = false
+        cropImg = null
+        manip = 0
+        mMoved = false
+        updateCropBar()
+        updateMore()
+        single?.invalidate()
+        invalidate()
+    }
+
+    /** Sale del modo recorte SIN cambios: la imagen vuelve a donde estaba. */
+    private fun cancelCrop() {
+        if (!cropMode) return
+        cropImg?.bounds?.set(cropOrig)
+        leaveCrop()
+    }
+
+    /**
+     * Confirma: extrae del bitmap exactamente lo que hay dentro de la ventana. Matemática:
+     *  1. La ventana se pasa al sistema LOCAL de la imagen (relativo a su centro, deshaciendo la rotación): toLocal(θ).
+     *  2. Con el tamaño de la imagen (W×H mm) eso da fracciones u0..u1, v0..v1 de 0 a 1 sobre lo que se ve.
+     *  3. Si está volteada, las fracciones se reflejan (u → 1−u) para apuntar a los píxeles del archivo.
+     *  4. Se redondea a píxeles y se corta con Bitmap.createBitmap(src, x, y, w, h).
+     *  5. El recuadro nuevo se calcula desde esos píxeles (no desde la ventana), para que coincida exacto con la imagen cortada.
+     */
+    private fun confirmCrop() {
+        val img = cropImg ?: return
+        val bm = img.bitmap ?: return
+        val b = img.bounds
+        val bw = b.width()
+        val bh = b.height()
+        val th = img.rotation
+        val l = Xf.toLocal(b.centerX(), b.centerY(), th, cropB.centerX(), cropB.centerY())
+        val hw = cropB.width() / 2f
+        val hh = cropB.height() / 2f
+        var u0 = ((l[0] - hw + bw / 2f) / bw).coerceIn(0f, 1f)
+        var u1 = ((l[0] + hw + bw / 2f) / bw).coerceIn(0f, 1f)
+        var v0 = ((l[1] - hh + bh / 2f) / bh).coerceIn(0f, 1f)
+        var v1 = ((l[1] + hh + bh / 2f) / bh).coerceIn(0f, 1f)
+        if (img.isFlippedH) {
+            val a = 1f - u1
+            u1 = 1f - u0
+            u0 = a
+        }
+        if (img.isFlippedV) {
+            val a = 1f - v1
+            v1 = 1f - v0
+            v0 = a
+        }
+        val x0 = (u0 * bm.width).roundToInt().coerceIn(0, bm.width - 1)
+        val x1 = (u1 * bm.width).roundToInt().coerceIn(x0 + 1, bm.width)
+        val y0 = (v0 * bm.height).roundToInt().coerceIn(0, bm.height - 1)
+        val y1 = (v1 * bm.height).roundToInt().coerceIn(y0 + 1, bm.height)
+        if (x0 == 0 && y0 == 0 && x1 == bm.width && y1 == bm.height) {
+            cancelCrop() // la ventana abarca toda la imagen: no hay nada que recortar
+            return
+        }
+        val out = try {
+            Bitmap.createBitmap(bm, x0, y0, x1 - x0, y1 - y0)
+        } catch (e: Throwable) {
+            null
+        }
+        val dir = img.file.parentFile
+        val saved = if (out != null && dir != null) ImageFiles.write(out, dir, java.util.UUID.randomUUID().toString()) else null
+        if (out == null || saved == null) {
+            Toast.makeText(context, "No se pudo recortar la imagen", Toast.LENGTH_SHORT).show()
+            return
+        }
+        // Región recortada, vista otra vez en pantalla (con el espejo): fracciones → mm locales → hoja.
+        var du0 = x0.toFloat() / bm.width
+        var du1 = x1.toFloat() / bm.width
+        var dv0 = y0.toFloat() / bm.height
+        var dv1 = y1.toFloat() / bm.height
+        if (img.isFlippedH) {
+            val a = 1f - du1
+            du1 = 1f - du0
+            du0 = a
+        }
+        if (img.isFlippedV) {
+            val a = 1f - dv1
+            dv1 = 1f - dv0
+            dv0 = a
+        }
+        val lx0 = du0 * bw - bw / 2f
+        val lx1 = du1 * bw - bw / 2f
+        val ly0 = dv0 * bh - bh / 2f
+        val ly1 = dv1 * bh - bh / 2f
+        val c = Xf.toPage(b.centerX(), b.centerY(), th, (lx0 + lx1) / 2f, (ly0 + ly1) / 2f)
+        val nw = lx1 - lx0
+        val nh = ly1 - ly0
+        val old = img.file
+        b.set(c[0] - nw / 2f, c[1] - nh / 2f, c[0] + nw / 2f, c[1] + nh / 2f)
+        img.bitmap = out
+        img.file = saved
+        img.baseW = nw
+        leaveCrop()
+        onItemsChanged?.invoke() // guarda el archivo nuevo y el recuadro en las capas
+        // El archivo viejo se borra cuando ya se escribió el JSON que apunta al nuevo.
+        Thread {
+            LayerRepository.flush()
+            try {
+                old.delete()
+            } catch (ignored: Exception) {
+                // Queda suelto; se borra con la nota.
+            }
+        }.start()
+    }
+
+    private fun createCropBar(): View {
+        val ctx = context
+        val row = LinearLayout(ctx)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.setPadding(dp(6), dp(6), dp(6), dp(6))
+        row.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 28, ctx.getColor(R.color.ln2))
+        row.elevation = 6f * d
+        row.addView(
+            UiKit.iconBtn(ctx, Icons.CLOSE, ctx.getColor(R.color.ink), 48, 24) { cancelCrop() },
+            LinearLayout.LayoutParams(dp(48), dp(48))
+        )
+        row.addView(
+            UiKit.iconBtn(ctx, Icons.CHECK, ThemeUtils.accentHi(ctx), 48, 24) { confirmCrop() },
+            LinearLayout.LayoutParams(dp(48), dp(48))
+        )
+        row.visibility = INVISIBLE
+        return row
+    }
+
+    private fun attachCropBar() {
+        val bar = cropBar ?: createCropBar().also { cropBar = it }
+        if (bar.parent == null) {
+            val lp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+            lp.topMargin = dp(12)
+            addView(bar, lp)
+        }
+        updateCropBar()
+    }
+
+    private fun updateCropBar() {
+        val bar = cropBar ?: return
+        val v = if (cropMode && bar.parent === this) VISIBLE else INVISIBLE
+        if (bar.visibility != v) bar.visibility = v
     }
 
     // ---------- Botón flotante de 3 puntos ----------
@@ -807,7 +1071,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /**
      * Siete botones en columna, de arriba abajo: enlace, recortar, recorte libre, voltear horizontal, voltear vertical
-     * (el mismo ícono girado 90°), opacidad y bloquear. Voltear y Opacidad ya funcionan; el resto avisa "Próximamente".
+     * (el mismo ícono girado 90°), opacidad y bloquear. Recortar, voltear y opacidad ya funcionan; el resto avisa "Próximamente".
      */
     private fun showMenu(anchor: View) {
         val ctx = context
@@ -818,7 +1082,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
         val acts = listOf(
             MenuAct(Icons.LINK, "Enlace", 0f, soonAct("Enlace")),
-            MenuAct(Icons.CROP, "Recortar", 0f, soonAct("Recortar")),
+            MenuAct(Icons.CROP, "Recortar", 0f) { enterCrop() },
             MenuAct(Icons.CUT, "Recorte libre", 0f, soonAct("Recorte libre")),
             MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
             MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
@@ -904,7 +1168,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun updateMore() {
         val b = more ?: return
         val item = selItem
-        if (item == null || tool != 4 || continuous || b.parent !== this) {
+        if (item == null || tool != 4 || continuous || cropMode || b.parent !== this) {
             hideMore(b)
             return
         }
@@ -948,6 +1212,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun drawSelection(c: Canvas) {
         val item = selItem ?: return
         if (tool != 4 || continuous) return
+        if (cropMode) {
+            drawCrop(c, item)
+            return
+        }
         val pts = handlePts(item) ?: return
         val acc = ThemeUtils.accentHi(context)
         val ink = context.getColor(R.color.ink)
@@ -969,6 +1237,53 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         c.drawCircle(pts[16], pts[17], 9f * d, ovFill)
         ovStroke.color = ink
         c.drawCircle(pts[16], pts[17], 9f * d, ovStroke)
+    }
+
+    /** Modo recorte: capa negra al 50 % sobre la imagen (menos la ventana), contorno de la ventana y sus 8 tiradores. */
+    private fun drawCrop(c: Canvas, item: SelectableItem) {
+        val img = pageToScreenQuad(item.bounds, item.rotation) ?: return
+        val win = pageToScreenQuad(cropB, item.rotation) ?: return
+        val v = single ?: return
+        val pg = floatArrayOf(0f, 0f, v.spec.wMm, 0f, v.spec.wMm, v.spec.hMm, 0f, v.spec.hMm)
+        val page = Path()
+        for (i in 0 until 4) {
+            val s = pageToScreen(pg[i * 2], pg[i * 2 + 1]) ?: return
+            if (i == 0) page.moveTo(s[0], s[1]) else page.lineTo(s[0], s[1])
+        }
+        page.close()
+        val mask = Path()
+        mask.fillType = Path.FillType.EVEN_ODD
+        mask.addPath(img)
+        mask.addPath(win)
+        val n = c.save()
+        c.clipPath(page) // lo que se sale de la hoja no se ve, tampoco su sombra
+        ovFill.color = 0x80000000.toInt()
+        c.drawPath(mask, ovFill)
+        c.restoreToCount(n)
+        val acc = ThemeUtils.accentHi(context)
+        val ink = context.getColor(R.color.ink)
+        ovStroke.color = acc
+        c.drawPath(win, ovStroke)
+        val pts = handlePtsFor(cropB, item.rotation) ?: return
+        for (i in 0 until 8) {
+            ovFill.color = ink
+            c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovFill)
+            c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovStroke)
+        }
+    }
+
+    /** Cuadrilátero (en pantalla) de un rectángulo de la hoja con su giro. */
+    private fun pageToScreenQuad(b: RectF, rot: Float): Path? {
+        val path = Path()
+        val xs = intArrayOf(-1, 1, 1, -1)
+        val ys = intArrayOf(-1, -1, 1, 1)
+        for (i in 0 until 4) {
+            val p = Xf.toPage(b.centerX(), b.centerY(), rot, xs[i] * b.width() / 2f, ys[i] * b.height() / 2f)
+            val s = pageToScreen(p[0], p[1]) ?: return null
+            if (i == 0) path.moveTo(s[0], s[1]) else path.lineTo(s[0], s[1])
+        }
+        path.close()
+        return path
     }
 
     // ---------- Gestos de vista ----------
@@ -1043,6 +1358,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (n < 0 || n >= specs.size || n == index) return
         index = n
         endManip()
+        cancelCrop()
         selItem = null
         resetTransform()
         rebuild()

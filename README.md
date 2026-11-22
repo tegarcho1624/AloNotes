@@ -216,6 +216,15 @@ el ícono del launcher (color fijo).
 - Menú de 3 puntos: **Voltear horizontal/vertical** alterna el espejo; **Opacidad** abre un panel flotante con porcentaje y SeekBar (0–100) que
   cambia la imagen en tiempo real y guarda al soltar o cerrar. El resto sigue en "Próximamente". Un solo popup abierto a la vez.
 
+## Recorte de imagen (v0.14.0)
+- Menú de 3 puntos → **Recortar** entra al modo recorte: se ocultan el botón de 3 puntos y el círculo de giro, la imagen se oscurece al 50 % fuera de la
+  ventana y aparecen X (cancelar) y Check (confirmar) arriba. Los 8 tiradores redimensionan la VENTANA (siempre dentro de la imagen); arrastrar el centro
+  desliza la imagen por debajo de la ventana (sin dejar la ventana fuera de la imagen).
+- **Confirmar** pasa la ventana al sistema local de la imagen (`Xf.toLocal` con su giro), la convierte en fracciones, refleja si está volteada, corta con
+  `Bitmap.createBitmap` y guarda un archivo NUEVO (`ImageFiles.write`); el recuadro se recalcula desde los píxeles recortados. El archivo viejo se borra
+  cuando ya se escribió el JSON de capas que apunta al nuevo. **Cancelar** devuelve la imagen a su sitio. Al salir vuelven el botón y el círculo.
+- `ImageItem.file` y `baseW` ahora son `var`. El JSON de capas ya guardaba el nombre del archivo y el rectángulo, así que no cambió su formato.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.
