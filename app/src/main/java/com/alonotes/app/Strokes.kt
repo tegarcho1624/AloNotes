@@ -1,6 +1,7 @@
 package com.alonotes.app
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
@@ -158,6 +159,44 @@ internal class PageLayers(first: List<Stroke>? = null) {
         for (l in layers) if (l.id > top) top = l.id.toInt()
         seq = top
         selected = sel
+    }
+
+    /** Foto del estado lógico de la hoja para el historial (sin bitmaps ni copias de puntos). */
+    fun snapshot(): PageSnap = PageSnap(
+        layers.map { ly ->
+            LayerSnap(
+                ly.id, ly.name, ly.isVisible, ly.opacity, ArrayList(ly.canvas),
+                ly.items.map { im ->
+                    ItemSnap(
+                        im.id, im.file, im.bounds.left, im.bounds.top, im.bounds.right, im.bounds.bottom,
+                        im.rotation, im.baseW, im.isFlippedH, im.isFlippedV, im.opacity
+                    )
+                }
+            )
+        },
+        selected, seq
+    )
+
+    /** Vuelve al estado de [s]. Las imágenes con el mismo id y archivo conservan el bitmap ya cargado (no se vuelve a leer). */
+    fun restoreSnapshot(s: PageSnap) {
+        if (s.layers.isEmpty()) return
+        val cache = HashMap<String, Bitmap?>()
+        for (ly in layers) for (im in ly.items) cache[im.id + "|" + im.file.path] = im.bitmap
+        val out = ArrayList<Layer>()
+        for (ls in s.layers) {
+            val ly = Layer(ls.id, ls.name, ls.visible, ls.opacity)
+            ly.canvas.addAll(ls.strokes)
+            for (isn in ls.items) {
+                val im = ImageItem(isn.id, isn.file, RectF(isn.l, isn.t, isn.r, isn.b), isn.rot, isn.baseW, isn.fh, isn.fv, isn.op)
+                im.bitmap = cache[isn.id + "|" + isn.file.path]
+                ly.items.add(im)
+            }
+            out.add(ly)
+        }
+        layers.clear()
+        layers.addAll(out)
+        seq = s.seq
+        selected = s.selected
     }
 
     /** Todos los trazos en orden (de abajo hacia arriba): así se guarda hasta que las capas se guarden por separado. */

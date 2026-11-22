@@ -47,6 +47,10 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     var onLayersChanged: ((Boolean) -> Unit)? = null
     private var model: PageLayers? = null
 
+    /** Se llama al completarse una acción sobre las capas, con la foto de la hoja de ANTES (historial de deshacer). */
+    var onRecord: ((PageSnap) -> Unit)? = null
+    private var dragPre: PageSnap? = null
+
     /** Se llama al mostrar u ocultar una capa (solo hay que redibujar la hoja). */
     var onVisibilityChanged: (() -> Unit)? = null
 
@@ -244,7 +248,10 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             f.removeAllViews()
             f.alpha = 1f
             f.addView(
-                row(ly, idx == m.selected, { idxOf(h).let { i -> if (i >= 0) select(i) } }, { touch.startDrag(h) }),
+                row(ly, idx == m.selected, { idxOf(h).let { i -> if (i >= 0) select(i) } }, {
+                    dragPre = model?.snapshot() // la hoja antes de reordenar
+                    touch.startDrag(h)
+                }),
                 FrameLayout.LayoutParams(-1, dp(52))
             )
         }
@@ -285,8 +292,11 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             // Al soltar: redibuja (orden de apilado) y guarda el nuevo orden.
             if (moved) {
                 moved = false
+                val pre = dragPre
+                if (pre != null) onRecord?.invoke(pre)
                 onLayersChanged?.invoke(true)
             }
+            dragPre = null
         }
     }
 
@@ -296,7 +306,9 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             Toast.makeText(a, "Máximo " + PageLayers.MAX + " capas", Toast.LENGTH_SHORT).show()
             return
         }
+        val pre = m.snapshot()
         m.add()
+        onRecord?.invoke(pre)
         fillList()
         onLayersChanged?.invoke(false)
     }
@@ -309,7 +321,9 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         }
         val ly = m.layers[m.selected]
         fun go() {
+            val pre = m.snapshot()
             m.removeSelected()
+            onRecord?.invoke(pre)
             fillList()
             onLayersChanged?.invoke(true)
         }
@@ -318,7 +332,9 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     }
 
     private fun toggleVisible(ly: Layer) {
+        val pre = model?.snapshot()
         ly.isVisible = !ly.isVisible
+        if (pre != null) onRecord?.invoke(pre)
         fillList()
         onVisibilityChanged?.invoke()
     }

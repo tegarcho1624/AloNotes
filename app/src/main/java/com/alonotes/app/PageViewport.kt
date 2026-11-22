@@ -73,6 +73,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     var strokes: DocStrokes? = null
     var onChanged: ((Int) -> Unit)? = null
 
+    /** Se llama al completarse una acción, con la foto de la hoja de ANTES (para el historial de deshacer). */
+    var onRecord: ((PageSnap) -> Unit)? = null
+
+    private fun snapNow(): PageSnap? = strokes?.page(index)?.snapshot()
+
     /** Se llama al terminar de mover, redimensionar o girar un elemento (hay que guardar las capas). */
     var onItemsChanged: (() -> Unit)? = null
 
@@ -131,6 +136,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private var live: FloatList? = null
     private var erasing = false
     private var erasedDirty = false
+    private var erasePre: PageSnap? = null // la hoja antes de empezar a borrar (se registra si algo cambió)
+    private var manipPre: PageSnap? = null // la hoja antes de mover/redimensionar/girar
     private var lastStylusT = -10000L
     private var penType = 0
     private var penColor = 0
@@ -236,6 +243,27 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         single?.invalidate()
         updateMore()
         invalidate()
+    }
+
+    /** Id de la imagen seleccionada (para volver a seleccionarla después de deshacer o rehacer). */
+    fun selectedId(): String? = selItem?.id
+
+    /** Tras restaurar la hoja las imágenes son objetos nuevos: vuelve a seleccionar la de ese id (si sigue y la herramienta es Seleccionar). */
+    fun reselect(id: String?) {
+        var found: SelectableItem? = null
+        val pl = strokes?.page(index)
+        if (id != null && tool == 4 && pl != null) {
+            for (ly in pl.layers) for (im in ly.items) if (im.id == id) found = im
+        }
+        selectItem(found)
+    }
+
+    /** Sale de los modos de recorte y suelta cualquier gesto, sin cambios (antes de deshacer o rehacer). */
+    fun cancelModes() {
+        cancelCrop()
+        manip = 0
+        mMoved = false
+        manipPre = null
     }
 
     /** Tamaño de la hoja actual (mm), o null si no hay hojas. */
@@ -440,6 +468,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (tool == 2) {
             erasing = true
             erasedDirty = false
+            erasePre = snapNow()
             eraserR = PenStore.eraserMm(PenStore.eraser(context))
             eLX = pt[0]
             eLY = pt[1]
@@ -542,8 +571,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val v = single
         v?.live = null
         if (l.size >= 3) {
+            val pre = snapNow()
             strokes?.page(index)?.active?.add(Stroke(penType, penColor, penW, l.toArray()))
             onChanged?.invoke(index)
+            if (pre != null) onRecord?.invoke(pre)
         }
         v?.invalidate()
     }
@@ -575,7 +606,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (erasing) {
             erasing = false
             single?.clearCursor()
-            if (erasedDirty) onChanged?.invoke(index)
+            if (erasedDirty) {
+                onChanged?.invoke(index)
+                recordErase()
+            }
             erasedDirty = false
         } else {
             // Último punto sin suavizar para que el trazo llegue hasta donde se levantó la punta.
@@ -589,11 +623,21 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         penDown = false
     }
 
+    /** Registra en el historial el borrado que acaba de terminar (una sola vez por gesto). */
+    private fun recordErase() {
+        val pre = erasePre
+        erasePre = null
+        if (pre != null) onRecord?.invoke(pre)
+    }
+
     private fun cancelStroke() {
         if (erasing) {
             erasing = false
             single?.clearCursor()
-            if (erasedDirty) onChanged?.invoke(index)
+            if (erasedDirty) {
+                onChanged?.invoke(index)
+                recordErase()
+            }
             erasedDirty = false
         }
         if (live != null) {
@@ -712,6 +756,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     }
 
     private fun startManip(item: SelectableItem, kind: Int, handle: Int, p: FloatArray) {
+        manipPre = snapNow()
         manip = kind
         mHandle = handle
         mP0x = p[0]
@@ -764,12 +809,20 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun endManip() {
         if (manip == 0) return
-        if (manip == M_LASSO) closeLasso() // al levantar el dedo el trazo se cierra solo
+        val kind = manip
+        if (kind == M_LASSO) closeLasso() // al levantar el dedo el trazo se cierra solo
         manip = 0
         if (mMoved) {
             mMoved = false
             // En los modos de recorte no se guarda nada hasta confirmar.
-            if (!cropMode && !lassoMode) onItemsChanged?.invoke()
+            if (!cropMode && !lassoMode) {
+                if (kind == M_MOVE || kind == M_RESIZE || kind == M_ROTATE) {
+                    val pre = manipPre
+                    if (pre != null) onRecord?.invoke(pre)
+                }
+                manipPre = null
+                onItemsChanged?.invoke()
+            }
         }
     }
 
@@ -926,17 +979,18 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             Toast.makeText(context, "No se pudo recortar la imagen", Toast.LENGTH_SHORT).show()
             return
         }
-        val old = commitCrop(img, bm, out, x0, y0, x1, y1) ?: return
+        val pre = snapNow()
+        if (commitCrop(img, bm, out, x0, y0, x1, y1) == null) return
         leaveCrop()
         onItemsChanged?.invoke() // guarda el archivo nuevo y el recuadro en las capas
-        deleteLater(old)
+        if (pre != null) onRecord?.invoke(pre)
     }
 
     /**
      * Parte común de los dos recortes (rectangular y libre): guarda [out] como archivo NUEVO y deja la imagen con ese bitmap
      * y un recuadro que cubre exactamente la región (x0,y0)-(x1,y1) del bitmap original [bm], con su giro y su espejo.
-     * Devuelve el archivo anterior (para borrarlo cuando el JSON ya apunte al nuevo) o null si no se pudo guardar
-     * (en ese caso la imagen no cambia).
+     * Devuelve el archivo anterior o null si no se pudo guardar (en ese caso la imagen no cambia). El archivo anterior NO se
+     * borra: el historial lo necesita para deshacer; los archivos sin uso se limpian al abrir la nota (EditorActivity).
      */
     private fun commitCrop(img: ImageItem, bm: Bitmap, out: Bitmap, x0: Int, y0: Int, x1: Int, y1: Int): java.io.File? {
         val dir = img.file.parentFile
@@ -976,18 +1030,6 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         img.file = saved
         img.baseW = nw
         return old
-    }
-
-    /** El archivo viejo se borra cuando ya se escribió el JSON de capas que apunta al nuevo. */
-    private fun deleteLater(old: java.io.File) {
-        Thread {
-            LayerRepository.flush()
-            try {
-                old.delete()
-            } catch (ignored: Exception) {
-                // Queda suelto; se borra con la nota.
-            }
-        }.start()
     }
 
     // ---------- Recorte libre (lazo) ----------
@@ -1161,11 +1203,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         cv.translate(-x0.toFloat(), -y0.toFloat())
         cv.clipPath(path)
         cv.drawBitmap(bm, 0f, 0f, null)
-        val old = commitCrop(img, bm, out, x0, y0, x1, y1) ?: return
+        val pre = snapNow()
+        if (commitCrop(img, bm, out, x0, y0, x1, y1) == null) return
         leaveLasso()
         single?.invalidate()
         onItemsChanged?.invoke()
-        deleteLater(old)
+        if (pre != null) onRecord?.invoke(pre)
     }
 
     private fun createCropBar(): View {
@@ -1257,10 +1300,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     /** Voltea el elemento seleccionado (espejo) y guarda. El recuadro es simétrico: no cambia. */
     private fun flipSelected(horizontal: Boolean) {
         val item = selItem ?: return
+        val pre = snapNow()
         if (horizontal) item.isFlippedH = !item.isFlippedH else item.isFlippedV = !item.isFlippedV
         single?.invalidate()
         invalidate()
         onItemsChanged?.invoke()
+        if (pre != null) onRecord?.invoke(pre)
     }
 
     /** Muestra el popup [pw] al lado del botón (a su izquierda, o a su derecha si no cabe), centrado con él en vertical. */
@@ -1353,10 +1398,16 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         sp.topMargin = dp(6)
         col.addView(seek, sp)
         var dirty = false
+        val pre = snapNow() // la hoja antes de tocar la opacidad
+        var recorded = false
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
                 label.text = "Opacidad: $p%"
                 if (fromUser) {
+                    if (!recorded && pre != null) {
+                        recorded = true
+                        onRecord?.invoke(pre) // una sola entrada en el historial por cada vez que se abre el panel
+                    }
                     item.opacity = p / 100f
                     dirty = true
                     single?.invalidate() // se ve al instante

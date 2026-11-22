@@ -233,6 +233,15 @@ el ícono del launcher (color fijo).
   se dibuja la imagen con `clipPath(lazo)` (PNG con transparencia fuera del lazo). El recuadro se recalcula desde ese rectángulo.
 - Guardado igual que el recorte rectangular (`commitCrop`: archivo nuevo, el viejo se borra cuando el JSON ya apunta al nuevo).
 
+## Deshacer y rehacer (v0.16.0)
+- `PageHistory` (`History.kt`): dos pilas de `PageSnap` (estado lógico de la hoja actual ANTES de cada acción: capas, trazos —referencias, no copias—,
+  imágenes con sus propiedades y la capa seleccionada; sin bitmaps: solo el archivo). Máximo 30 pasos. Una acción nueva borra la pila de rehacer.
+  Se vacía al cambiar de hoja y, como vive en el editor, al salir de la nota.
+- Se registra al completar: un trazo, un borrado (una entrada por gesto), insertar imagen, mover/redimensionar/girar, voltear, opacidad (una por vez que se
+  abre el panel), recorte rectangular y libre, y las acciones de capas (agregar, eliminar, reordenar, mostrar/ocultar) para que la hoja nunca quede incoherente.
+- Botones: las flechas curvas de arriba a la derecha (`ROT_L` deshacer, `ROT_R` rehacer); en gris si no hay nada o en vista continua.
+- Al recortar, el archivo anterior ya no se borra (el historial lo necesita). Los archivos de imagen sin uso (de más de un minuto) se limpian al abrir la nota.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

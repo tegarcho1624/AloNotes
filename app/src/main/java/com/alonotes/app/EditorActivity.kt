@@ -46,6 +46,7 @@ class EditorActivity : Activity() {
     private lateinit var emptyView: LinearLayout
     private lateinit var layers: LayersView
     private lateinit var layersPanel: LayersPanel
+    private val history = PageHistory(30) // deshacer/rehacer de la hoja actual (máx. 30 pasos)
     private lateinit var counter: TextView
     private lateinit var bar: LinearLayout
     private lateinit var bgLayer: BackgroundLayer
@@ -86,9 +87,15 @@ class EditorActivity : Activity() {
         val area = FrameLayout(this)
         viewport = PageViewport(this)
         viewport.restore(b?.getBoolean("cont") ?: false, b?.getInt("page") ?: 0)
-        viewport.onPage = { updateCounter() }
+        viewport.onPage = {
+            history.clear() // al cambiar de hoja el historial empieza de cero
+            updateCounter()
+        }
+        viewport.onRecord = { history.record(it) }
+        history.onChange = { if (::bar.isInitialized) buildBar() } // activa o apaga deshacer/rehacer
         strokes = StrokeStore.load(this, docId)
         LayerRepository.applyTo(this, docId, strokes)
+        cleanOrphanImages()
         viewport.strokes = strokes
         viewport.onChanged = {
             persistStrokes()
@@ -122,6 +129,7 @@ class EditorActivity : Activity() {
         // Panel flotante de capas (arrastrable, expandido o minimizado)
         layersPanel = LayersPanel(this)
         layersPanel.onClose = { updateLayersUi() }
+        layersPanel.onRecord = { history.record(it) }
         layersPanel.onVisibilityChanged = {
             viewport.refreshPage()
             persistLayers()
@@ -229,14 +237,56 @@ class EditorActivity : Activity() {
         }
         bar.addView(eye, UiKit.box(this, 44))
         bar.addView(tb(Icons.LOCK, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
-        bar.addView(tb(Icons.ROT_L, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
-        bar.addView(tb(Icons.ROT_R, mut) { UiKit.soon(this) }, UiKit.box(this, 44))
+        // Deshacer / rehacer: en gris cuando no hay nada que deshacer o rehacer (y en la vista continua)
+        val canU = history.canUndo && !cont
+        val canR = history.canRedo && !cont
+        bar.addView(tb(Icons.ROT_L, if (canU) ink else mut) { if (canU) undo() }, UiKit.box(this, 44))
+        bar.addView(tb(Icons.ROT_R, if (canR) ink else mut) { if (canR) redo() }, UiKit.box(this, 44))
         val div = View(this)
         div.setBackgroundColor(getColor(R.color.ln2))
         val dv = LinearLayout.LayoutParams(dp(1), dp(24))
         dv.setMargins(dp(8), 0, dp(8), 0)
         bar.addView(div, dv)
         bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+    }
+
+    // ---------- Deshacer y rehacer ----------
+
+    private fun undo() = stepHistory(true)
+
+    private fun redo() = stepHistory(false)
+
+    /** Aplica el estado anterior (deshacer) o el siguiente (rehacer) a la hoja actual y guarda. */
+    private fun stepHistory(undo: Boolean) {
+        if (total == 0 || viewport.continuous) return
+        val pl = strokes.page(viewport.index)
+        val selId = viewport.selectedId()
+        viewport.cancelModes()
+        val snap = (if (undo) history.undo(pl.snapshot()) else history.redo(pl.snapshot())) ?: return
+        pl.restoreSnapshot(snap)
+        syncLayers() // panel de capas e ícono
+        viewport.reselect(selId)
+        viewport.refreshPage()
+        persistStrokes()
+        persistLayers()
+    }
+
+    /** Borra los archivos de imagen de la nota que ninguna hoja usa (quedan al recortar, para poder deshacer). */
+    private fun cleanOrphanImages() {
+        val keep = HashSet<String>()
+        for (pl in strokes.pages) for (ly in pl.layers) for (im in ly.items) keep.add(im.file.name)
+        val dir = File(filesDir, "images/$docId")
+        Thread {
+            try {
+                val now = System.currentTimeMillis()
+                dir.listFiles()?.forEach { f ->
+                    // Solo archivos de más de un minuto: nunca se toca lo que se acaba de guardar.
+                    if (!keep.contains(f.name) && now - f.lastModified() > 60000L) f.delete()
+                }
+            } catch (ignored: Exception) {
+                // Se limpiará la próxima vez.
+            }
+        }.start()
     }
 
     // ---------- Gestor de páginas ----------
@@ -328,7 +378,9 @@ class EditorActivity : Activity() {
         val cy = sp.hMm / 2f
         val item = ImageItem(id, f, RectF(cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f), 0f, w)
         item.bitmap = bm
+        val pre = pl.snapshot() // la hoja antes de insertar la imagen
         layer.items.add(item)
+        history.record(pre)
         tool = 4
         viewport.tool = 4
         viewport.selectItem(item)
