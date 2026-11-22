@@ -225,6 +225,14 @@ el ícono del launcher (color fijo).
   cuando ya se escribió el JSON de capas que apunta al nuevo. **Cancelar** devuelve la imagen a su sitio. Al salir vuelven el botón y el círculo.
 - `ImageItem.file` y `baseW` ahora son `var`. El JSON de capas ya guardaba el nombre del archivo y el rectángulo, así que no cambió su formato.
 
+## Recorte libre (v0.15.0)
+- Menú de 3 puntos → **Recorte libre** (tijeras): se oculta el botón de 3 puntos, la hoja se oscurece un poco, sale la instrucción "Dibuja el contorno a recortar"
+  y arriba aparecen X y Check (los mismos del recorte rectangular). Se dibuja un trazo continuo con el dedo (línea dorada punteada en tiempo real); al levantar
+  el dedo se cierra solo y lo de fuera del lazo se oscurece más. Se puede volver a dibujar hasta confirmar. **X** borra el trazo y sale sin tocar la imagen.
+- **Check:** lleva el lazo al sistema de la imagen (deshace giro, centrado y espejo), `Path.computeBounds` da el rectángulo mínimo, se crea un `Bitmap` de ese tamaño y
+  se dibuja la imagen con `clipPath(lazo)` (PNG con transparencia fuera del lazo). El recuadro se recalcula desde ese rectángulo.
+- Guardado igual que el recorte rectangular (`commitCrop`: archivo nuevo, el viejo se borra cuando el JSON ya apunta al nuevo).
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

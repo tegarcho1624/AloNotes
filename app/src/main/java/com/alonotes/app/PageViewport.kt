@@ -5,6 +5,7 @@ import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -27,6 +28,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
+import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -83,6 +85,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private val cropB = RectF() // ventana de recorte (mm de la hoja, con el giro de la imagen)
     private val cropOrig = RectF() // posición de la imagen al entrar (para cancelar)
     private var cropBar: View? = null
+
+    // Modo recorte libre (lazo): el trazo vive en mm de la hoja, así no depende del zoom ni de la rotación de la vista.
+    private var lassoMode = false
+    private var lassoImg: ImageItem? = null
+    private val lassoPts = ArrayList<Float>() // x, y, x, y...
+    private var lassoClosed = false
 
     /** Botón flotante de 3 puntos, anclado al lado izquierdo del recuadro de selección. */
     private var more: View? = null
@@ -154,6 +162,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private val mB0 = RectF()
     private val ovStroke = Paint(Paint.ANTI_ALIAS_FLAG)
     private val ovFill = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ovText = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val ovDash = DashPathEffect(floatArrayOf(10f * d, 6f * d), 0f)
 
     private companion object {
         const val M_MOVE = 1
@@ -161,6 +171,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         const val M_ROTATE = 3
         const val M_CROP_RESIZE = 4
         const val M_CROP_MOVE = 5
+        const val M_LASSO = 6
 
         // Tiradores: 0 sup-izq, 1 sup, 2 sup-der, 3 izq, 4 der, 5 inf-izq, 6 inf, 7 inf-der (8 = círculo de giro).
         val HX = intArrayOf(-1, 0, 1, -1, 1, -1, 0, 1)
@@ -171,6 +182,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         ovStroke.style = Paint.Style.STROKE
         ovStroke.strokeWidth = 2f * d
         ovFill.style = Paint.Style.FILL
+        ovText.textSize = 16f * d
+        ovText.textAlign = Paint.Align.CENTER
+        ovText.setShadowLayer(3f * d, 0f, 0f, 0xFF000000.toInt())
     }
 
     // ---------- API ----------
@@ -669,6 +683,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun beginSelect(e: MotionEvent, stylus: Boolean) {
         if (!stylus && e.eventTime - lastStylusT < 1500) return // palma
         val p = toPage(e.x, e.y) ?: return
+        if (lassoMode) {
+            startLasso(p)
+            return
+        }
         if (cropMode) {
             beginCrop(e, p)
             return
@@ -707,9 +725,15 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun selMove(e: MotionEvent) {
         val item = selItem ?: return
-        if (!mMoved && hypot(e.x - sx, e.y - sy) < touchSlop) return // un toque no mueve nada
+        // El lazo registra desde el primer movimiento; lo demás espera a superar el umbral (un toque no mueve nada).
+        if (manip != M_LASSO && !mMoved && hypot(e.x - sx, e.y - sy) < touchSlop) return
         val p = toPage(e.x, e.y) ?: return
         mMoved = true
+        if (manip == M_LASSO) {
+            addLassoPoint(p)
+            invalidate()
+            return
+        }
         when (manip) {
             M_MOVE -> {
                 item.bounds.set(mB0)
@@ -740,11 +764,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun endManip() {
         if (manip == 0) return
+        if (manip == M_LASSO) closeLasso() // al levantar el dedo el trazo se cierra solo
         manip = 0
         if (mMoved) {
             mMoved = false
-            // En el modo recorte no se guarda nada hasta confirmar.
-            if (!cropMode) onItemsChanged?.invoke()
+            // En los modos de recorte no se guarda nada hasta confirmar.
+            if (!cropMode && !lassoMode) onItemsChanged?.invoke()
         }
     }
 
@@ -846,6 +871,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Sale del modo recorte SIN cambios: la imagen vuelve a donde estaba. */
     private fun cancelCrop() {
+        if (lassoMode) leaveLasso() // la X sirve para los dos modos: se borra el trazo y la imagen no cambia
         if (!cropMode) return
         cropImg?.bounds?.set(cropOrig)
         leaveCrop()
@@ -896,13 +922,33 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         } catch (e: Throwable) {
             null
         }
-        val dir = img.file.parentFile
-        val saved = if (out != null && dir != null) ImageFiles.write(out, dir, java.util.UUID.randomUUID().toString()) else null
-        if (out == null || saved == null) {
+        if (out == null) {
             Toast.makeText(context, "No se pudo recortar la imagen", Toast.LENGTH_SHORT).show()
             return
         }
-        // Región recortada, vista otra vez en pantalla (con el espejo): fracciones → mm locales → hoja.
+        val old = commitCrop(img, bm, out, x0, y0, x1, y1) ?: return
+        leaveCrop()
+        onItemsChanged?.invoke() // guarda el archivo nuevo y el recuadro en las capas
+        deleteLater(old)
+    }
+
+    /**
+     * Parte común de los dos recortes (rectangular y libre): guarda [out] como archivo NUEVO y deja la imagen con ese bitmap
+     * y un recuadro que cubre exactamente la región (x0,y0)-(x1,y1) del bitmap original [bm], con su giro y su espejo.
+     * Devuelve el archivo anterior (para borrarlo cuando el JSON ya apunte al nuevo) o null si no se pudo guardar
+     * (en ese caso la imagen no cambia).
+     */
+    private fun commitCrop(img: ImageItem, bm: Bitmap, out: Bitmap, x0: Int, y0: Int, x1: Int, y1: Int): java.io.File? {
+        val dir = img.file.parentFile
+        val saved = if (dir != null) ImageFiles.write(out, dir, java.util.UUID.randomUUID().toString()) else null
+        if (saved == null) {
+            Toast.makeText(context, "No se pudo guardar la imagen recortada", Toast.LENGTH_SHORT).show()
+            return null
+        }
+        val b = img.bounds
+        val bw = b.width()
+        val bh = b.height()
+        // Región recortada, vista otra vez en pantalla (con el espejo): fracciones -> mm locales -> hoja.
         var du0 = x0.toFloat() / bm.width
         var du1 = x1.toFloat() / bm.width
         var dv0 = y0.toFloat() / bm.height
@@ -921,7 +967,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val lx1 = du1 * bw - bw / 2f
         val ly0 = dv0 * bh - bh / 2f
         val ly1 = dv1 * bh - bh / 2f
-        val c = Xf.toPage(b.centerX(), b.centerY(), th, (lx0 + lx1) / 2f, (ly0 + ly1) / 2f)
+        val c = Xf.toPage(b.centerX(), b.centerY(), img.rotation, (lx0 + lx1) / 2f, (ly0 + ly1) / 2f)
         val nw = lx1 - lx0
         val nh = ly1 - ly0
         val old = img.file
@@ -929,9 +975,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         img.bitmap = out
         img.file = saved
         img.baseW = nw
-        leaveCrop()
-        onItemsChanged?.invoke() // guarda el archivo nuevo y el recuadro en las capas
-        // El archivo viejo se borra cuando ya se escribió el JSON que apunta al nuevo.
+        return old
+    }
+
+    /** El archivo viejo se borra cuando ya se escribió el JSON de capas que apunta al nuevo. */
+    private fun deleteLater(old: java.io.File) {
         Thread {
             LayerRepository.flush()
             try {
@@ -940,6 +988,184 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 // Queda suelto; se borra con la nota.
             }
         }.start()
+    }
+
+    // ---------- Recorte libre (lazo) ----------
+
+    private fun enterLasso() {
+        val img = selItem as? ImageItem ?: return
+        if (img.bitmap == null) {
+            Toast.makeText(context, "La imagen aún se está cargando", Toast.LENGTH_SHORT).show()
+            return
+        }
+        lassoMode = true
+        lassoImg = img
+        lassoPts.clear()
+        lassoClosed = false
+        manip = 0
+        updateCropBar()
+        updateMore()
+        invalidate()
+    }
+
+    private fun leaveLasso() {
+        lassoMode = false
+        lassoImg = null
+        lassoPts.clear()
+        lassoClosed = false
+        manip = 0
+        mMoved = false
+        updateCropBar()
+        updateMore()
+        invalidate()
+    }
+
+    private fun startLasso(p: FloatArray) {
+        lassoPts.clear()
+        lassoClosed = false
+        lassoPts.add(p[0])
+        lassoPts.add(p[1])
+        manip = M_LASSO
+        mMoved = false
+        invalidate()
+    }
+
+    private fun addLassoPoint(p: FloatArray) {
+        val n = lassoPts.size
+        if (n < 2) return
+        if (hypot(p[0] - lassoPts[n - 2], p[1] - lassoPts[n - 1]) < 0.4f) return // ~0,4 mm: sin puntos de más
+        lassoPts.add(p[0])
+        lassoPts.add(p[1])
+    }
+
+    /** Al levantar el dedo el trazo se cierra (el último punto se une con el primero al dibujarlo y al recortar). */
+    private fun closeLasso() {
+        if (lassoPts.size < 6) {
+            lassoPts.clear()
+            lassoClosed = false
+        } else {
+            lassoClosed = true
+        }
+        invalidate()
+    }
+
+    /** El trazo en pantalla (aplica zoom, giro y desplazamiento de la vista). Cerrado si ya se levantó el dedo. */
+    private fun lassoScreenPath(): Path? {
+        val v = single ?: return null
+        if (lassoPts.size < 4) return null
+        val sc = v.width / v.spec.wMm
+        if (sc <= 0f) return null
+        val arr = FloatArray(lassoPts.size)
+        for (i in arr.indices) arr[i] = lassoPts[i] * sc
+        v.matrix.mapPoints(arr)
+        val path = Path()
+        path.moveTo(arr[0] + v.left, arr[1] + v.top)
+        var i = 2
+        while (i < arr.size) {
+            path.lineTo(arr[i] + v.left, arr[i + 1] + v.top)
+            i += 2
+        }
+        if (lassoClosed) path.close()
+        return path
+    }
+
+    /** Capa oscura sobre la hoja (más fuerte fuera del lazo cuando ya está cerrado), línea dorada punteada y la instrucción. */
+    private fun drawLasso(c: Canvas) {
+        val v = single ?: return
+        val page = Path()
+        val pg = floatArrayOf(0f, 0f, v.spec.wMm, 0f, v.spec.wMm, v.spec.hMm, 0f, v.spec.hMm)
+        for (i in 0 until 4) {
+            val s = pageToScreen(pg[i * 2], pg[i * 2 + 1]) ?: return
+            if (i == 0) page.moveTo(s[0], s[1]) else page.lineTo(s[0], s[1])
+        }
+        page.close()
+        val lasso = lassoScreenPath()
+        val n = c.save()
+        c.clipPath(page)
+        if (lassoClosed && lasso != null) {
+            val mask = Path()
+            mask.fillType = Path.FillType.EVEN_ODD
+            mask.addPath(page)
+            mask.addPath(lasso)
+            ovFill.color = 0x99000000.toInt()
+            c.drawPath(mask, ovFill)
+        } else {
+            ovFill.color = 0x55000000
+            c.drawPath(page, ovFill)
+        }
+        c.restoreToCount(n)
+        if (lasso != null) {
+            ovStroke.color = ThemeUtils.accentHi(context)
+            ovStroke.pathEffect = ovDash
+            c.drawPath(lasso, ovStroke)
+            ovStroke.pathEffect = null
+        }
+        if (!lassoClosed) {
+            ovText.color = context.getColor(R.color.ink)
+            c.drawText("Dibuja el contorno a recortar", width / 2f, 96f * d, ovText)
+        }
+    }
+
+    /**
+     * Confirma el recorte libre. En vez de dibujar con la Matrix de la imagen, se hace el camino inverso (equivalente y sin
+     * volver a muestrear píxeles): cada punto del lazo (hoja, mm) se lleva al sistema de la imagen deshaciendo su giro
+     * (toLocal con θ), se convierte en fracción 0..1, se refleja si está volteada y se multiplica por el ancho/alto del archivo.
+     * Con el lazo ya en píxeles del archivo: computeBounds da el rectángulo mínimo; se crea un Bitmap de ese tamaño y se
+     * dibuja la imagen con clipPath(lazo). Lo que queda fuera del lazo es transparente (PNG).
+     */
+    private fun confirmLasso() {
+        val img = lassoImg ?: return
+        val bm = img.bitmap ?: return
+        if (!lassoClosed || lassoPts.size < 6) {
+            Toast.makeText(context, "Dibuja el contorno a recortar", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val b = img.bounds
+        val w = b.width()
+        val h = b.height()
+        val th = img.rotation
+        val path = Path()
+        var i = 0
+        while (i < lassoPts.size) {
+            val l = Xf.toLocal(b.centerX(), b.centerY(), th, lassoPts[i], lassoPts[i + 1])
+            var u = (l[0] + w / 2f) / w
+            var vv = (l[1] + h / 2f) / h
+            if (img.isFlippedH) u = 1f - u
+            if (img.isFlippedV) vv = 1f - vv
+            val px = u * bm.width
+            val py = vv * bm.height
+            if (i == 0) path.moveTo(px, py) else path.lineTo(px, py)
+            i += 2
+        }
+        path.close() // el último punto se une con el primero
+        val rf = RectF()
+        path.computeBounds(rf, true)
+        if (rf.right <= 0f || rf.bottom <= 0f || rf.left >= bm.width || rf.top >= bm.height) {
+            Toast.makeText(context, "El trazo quedó fuera de la imagen", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val x0 = floor(rf.left).toInt().coerceIn(0, bm.width - 1)
+        val y0 = floor(rf.top).toInt().coerceIn(0, bm.height - 1)
+        val x1 = ceil(rf.right).toInt().coerceIn(x0 + 1, bm.width)
+        val y1 = ceil(rf.bottom).toInt().coerceIn(y0 + 1, bm.height)
+        val out = try {
+            Bitmap.createBitmap(x1 - x0, y1 - y0, Bitmap.Config.ARGB_8888)
+        } catch (e: Throwable) {
+            null
+        }
+        if (out == null) {
+            Toast.makeText(context, "No se pudo recortar la imagen", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val cv = Canvas(out)
+        cv.translate(-x0.toFloat(), -y0.toFloat())
+        cv.clipPath(path)
+        cv.drawBitmap(bm, 0f, 0f, null)
+        val old = commitCrop(img, bm, out, x0, y0, x1, y1) ?: return
+        leaveLasso()
+        single?.invalidate()
+        onItemsChanged?.invoke()
+        deleteLater(old)
     }
 
     private fun createCropBar(): View {
@@ -955,7 +1181,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             LinearLayout.LayoutParams(dp(48), dp(48))
         )
         row.addView(
-            UiKit.iconBtn(ctx, Icons.CHECK, ThemeUtils.accentHi(ctx), 48, 24) { confirmCrop() },
+            UiKit.iconBtn(ctx, Icons.CHECK, ThemeUtils.accentHi(ctx), 48, 24) { if (lassoMode) confirmLasso() else confirmCrop() },
             LinearLayout.LayoutParams(dp(48), dp(48))
         )
         row.visibility = INVISIBLE
@@ -974,7 +1200,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun updateCropBar() {
         val bar = cropBar ?: return
-        val v = if (cropMode && bar.parent === this) VISIBLE else INVISIBLE
+        val v = if ((cropMode || lassoMode) && bar.parent === this) VISIBLE else INVISIBLE
         if (bar.visibility != v) bar.visibility = v
     }
 
@@ -1083,7 +1309,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val acts = listOf(
             MenuAct(Icons.LINK, "Enlace", 0f, soonAct("Enlace")),
             MenuAct(Icons.CROP, "Recortar", 0f) { enterCrop() },
-            MenuAct(Icons.CUT, "Recorte libre", 0f, soonAct("Recorte libre")),
+            MenuAct(Icons.CUT, "Recorte libre", 0f) { enterLasso() },
             MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
             MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
             MenuAct(Icons.OPACITY, "Opacidad", 0f) { showOpacity(anchor) },
@@ -1168,7 +1394,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun updateMore() {
         val b = more ?: return
         val item = selItem
-        if (item == null || tool != 4 || continuous || cropMode || b.parent !== this) {
+        if (item == null || tool != 4 || continuous || cropMode || lassoMode || b.parent !== this) {
             hideMore(b)
             return
         }
@@ -1212,6 +1438,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun drawSelection(c: Canvas) {
         val item = selItem ?: return
         if (tool != 4 || continuous) return
+        if (lassoMode) {
+            drawLasso(c)
+            return
+        }
         if (cropMode) {
             drawCrop(c, item)
             return
