@@ -1,6 +1,7 @@
 package com.alonotes.app
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
@@ -19,6 +20,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.OverScroller
 import android.widget.PopupWindow
+import android.widget.SeekBar
 import android.widget.Toast
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -735,14 +737,17 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     // ---------- Menú flotante de la imagen (PopupWindow) ----------
 
+    /** El popup abierto (el menú o el panel de opacidad); solo hay uno a la vez. */
     private var menu: PopupWindow? = null
     private var menuClosedAt = 0L
+
+    private class MenuAct(val icon: Int, val name: String, val rot: Float, val run: () -> Unit)
 
     private fun dismissMenu() {
         menu?.dismiss()
     }
 
-    /** Abre el menú o, si ya está abierto, lo cierra. */
+    /** Abre el menú o, si ya hay un popup abierto, lo cierra. */
     private fun toggleMenu() {
         val b = more ?: return
         val open = menu
@@ -750,55 +755,26 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             open.dismiss()
             return
         }
-        // Tocar el botón con el menú abierto: el toque "fuera" ya lo cerró un instante antes; no se vuelve a abrir.
+        // Tocar el botón con el popup abierto: el toque "fuera" ya lo cerró un instante antes; no se vuelve a abrir.
         if (SystemClock.uptimeMillis() - menuClosedAt < 300) return
         showMenu(b)
     }
 
-    /**
-     * Siete botones en columna, de arriba abajo: enlace, recortar, recorte libre, voltear horizontal, voltear vertical
-     * (el mismo ícono girado 90°), opacidad y bloquear. Por ahora solo cierran el menú y avisan "Próximamente".
-     * Se coloca al lado del botón de 3 puntos (a su izquierda, o a su derecha si no cabe) y centrado con él en vertical.
-     */
-    private fun showMenu(anchor: View) {
-        val ctx = context
-        val ink = ctx.getColor(R.color.ink)
-        val col = LinearLayout(ctx)
-        col.orientation = LinearLayout.VERTICAL
-        col.setPadding(dp(4), dp(4), dp(4), dp(4))
-        col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
-        val items = listOf(
-            Triple(Icons.LINK, "Enlace", 0f),
-            Triple(Icons.CROP, "Recortar", 0f),
-            Triple(Icons.CUT, "Recorte libre", 0f),
-            Triple(Icons.FLIP, "Voltear horizontal", 0f),
-            Triple(Icons.FLIP, "Voltear vertical", 90f),
-            Triple(Icons.OPACITY, "Opacidad", 0f),
-            Triple(Icons.LOCK, "Bloquear objeto", 0f)
-        )
-        for ((icon, name, rot) in items) {
-            val btn = UiKit.iconBtn(ctx, icon, ink, 44, 22) {
-                dismissMenu()
-                Toast.makeText(ctx, "$name: Próximamente", Toast.LENGTH_SHORT).show()
-            }
-            btn.rotation = rot
-            col.addView(btn, LinearLayout.LayoutParams(dp(44), dp(44)))
-        }
-        col.measure(
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
-            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-        )
-        val w = col.measuredWidth
-        val h = col.measuredHeight
-        val pw = PopupWindow(col, w, h, false)
-        pw.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-        // No toma el foco: un toque fuera lo cierra y además llega a la hoja (por ejemplo, para deseleccionar).
-        pw.isFocusable = false
-        pw.isOutsideTouchable = true
-        pw.setOnDismissListener {
-            menu = null
-            menuClosedAt = SystemClock.uptimeMillis()
-        }
+    private fun soonAct(name: String): () -> Unit = {
+        Toast.makeText(context, "$name: Próximamente", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Voltea el elemento seleccionado (espejo) y guarda. El recuadro es simétrico: no cambia. */
+    private fun flipSelected(horizontal: Boolean) {
+        val item = selItem ?: return
+        if (horizontal) item.isFlippedH = !item.isFlippedH else item.isFlippedV = !item.isFlippedV
+        single?.invalidate()
+        invalidate()
+        onItemsChanged?.invoke()
+    }
+
+    /** Muestra el popup [pw] al lado del botón (a su izquierda, o a su derecha si no cabe), centrado con él en vertical. */
+    private fun placeBeside(pw: PopupWindow, anchor: View, w: Int, h: Int) {
         val loc = IntArray(2)
         getLocationOnScreen(loc)
         val gap = dp(8)
@@ -809,6 +785,110 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val y = (by + dp(22) - h / 2f).coerceIn(loc[1].toFloat(), max(loc[1].toFloat(), (loc[1] + height - h).toFloat()))
         pw.showAtLocation(this, Gravity.TOP or Gravity.START, x.roundToInt(), y.roundToInt())
         menu = pw
+    }
+
+    /** Ventana flotante sin foco: un toque fuera la cierra y además llega a la hoja. [onGone] se llama al cerrarse. */
+    private fun makePopup(content: View, onGone: () -> Unit): PopupWindow {
+        content.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val pw = PopupWindow(content, content.measuredWidth, content.measuredHeight, false)
+        pw.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        pw.isFocusable = false
+        pw.isOutsideTouchable = true
+        pw.setOnDismissListener {
+            if (menu === pw) menu = null
+            menuClosedAt = SystemClock.uptimeMillis()
+            onGone()
+        }
+        return pw
+    }
+
+    /**
+     * Siete botones en columna, de arriba abajo: enlace, recortar, recorte libre, voltear horizontal, voltear vertical
+     * (el mismo ícono girado 90°), opacidad y bloquear. Voltear y Opacidad ya funcionan; el resto avisa "Próximamente".
+     */
+    private fun showMenu(anchor: View) {
+        val ctx = context
+        val ink = ctx.getColor(R.color.ink)
+        val col = LinearLayout(ctx)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(4), dp(4), dp(4), dp(4))
+        col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
+        val acts = listOf(
+            MenuAct(Icons.LINK, "Enlace", 0f, soonAct("Enlace")),
+            MenuAct(Icons.CROP, "Recortar", 0f, soonAct("Recortar")),
+            MenuAct(Icons.CUT, "Recorte libre", 0f, soonAct("Recorte libre")),
+            MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
+            MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
+            MenuAct(Icons.OPACITY, "Opacidad", 0f) { showOpacity(anchor) },
+            MenuAct(Icons.LOCK, "Bloquear objeto", 0f, soonAct("Bloquear objeto"))
+        )
+        for (a in acts) {
+            val btn = UiKit.iconBtn(ctx, a.icon, ink, 44, 22) {
+                dismissMenu()
+                a.run()
+            }
+            btn.rotation = a.rot
+            col.addView(btn, LinearLayout.LayoutParams(dp(44), dp(44)))
+        }
+        val pw = makePopup(col) {}
+        placeBeside(pw, anchor, col.measuredWidth, col.measuredHeight)
+    }
+
+    /**
+     * Panel de opacidad: porcentaje y un SeekBar de 0 a 100. Cambia la opacidad de la imagen en tiempo real (el alpha con el
+     * que se dibuja) y la guarda al soltar el control o al cerrar el panel.
+     */
+    private fun showOpacity(anchor: View) {
+        val item = selItem ?: return
+        val ctx = context
+        val ink = ctx.getColor(R.color.ink)
+        val acc = ThemeUtils.accent(ctx)
+        val col = LinearLayout(ctx)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(16), dp(12), dp(16), dp(12))
+        col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
+        val start = (item.opacity.coerceIn(0f, 1f) * 100f).roundToInt()
+        val label = UiKit.text(ctx, "Opacidad: $start%", 15, ink)
+        col.addView(label)
+        val seek = SeekBar(ctx)
+        seek.max = 100
+        seek.progress = start
+        seek.progressTintList = ColorStateList.valueOf(acc)
+        seek.thumbTintList = ColorStateList.valueOf(acc)
+        seek.progressBackgroundTintList = ColorStateList.valueOf(ctx.getColor(R.color.ln2))
+        val sp = LinearLayout.LayoutParams(dp(220), -2)
+        sp.topMargin = dp(6)
+        col.addView(seek, sp)
+        var dirty = false
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
+                label.text = "Opacidad: $p%"
+                if (fromUser) {
+                    item.opacity = p / 100f
+                    dirty = true
+                    single?.invalidate() // se ve al instante
+                }
+            }
+
+            override fun onStartTrackingTouch(sb: SeekBar) {}
+
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                if (dirty) {
+                    dirty = false
+                    onItemsChanged?.invoke()
+                }
+            }
+        })
+        val pw = makePopup(col) {
+            if (dirty) {
+                dirty = false
+                onItemsChanged?.invoke()
+            }
+        }
+        placeBeside(pw, anchor, col.measuredWidth, col.measuredHeight)
     }
 
     override fun onDetachedFromWindow() {

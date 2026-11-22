@@ -11,6 +11,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -31,6 +32,15 @@ internal interface SelectableItem {
 
     /** Si es true, los tiradores de las esquinas conservan la proporción. */
     val lockAspect: Boolean get() = true
+
+    /** Espejo en el eje X (izquierda-derecha), en los ejes propios del elemento (sigue valiendo si está girado). */
+    var isFlippedH: Boolean
+
+    /** Espejo en el eje Y (arriba-abajo), en los ejes propios del elemento. */
+    var isFlippedV: Boolean
+
+    /** 0 = transparente, 1 = opaco. */
+    var opacity: Float
 
     fun draw(c: Canvas, mmToPx: Float, invalidate: () -> Unit)
 
@@ -117,7 +127,10 @@ internal class ImageItem(
     override val bounds: RectF,
     override var rotation: Float,
     /** Ancho (mm) con el que se insertó, para calcular [scale]. */
-    val baseW: Float
+    val baseW: Float,
+    override var isFlippedH: Boolean = false,
+    override var isFlippedV: Boolean = false,
+    override var opacity: Float = 1f
 ) : SelectableItem {
     var bitmap: Bitmap? = null
     private var loading = false
@@ -128,18 +141,33 @@ internal class ImageItem(
     override val scale: Float get() = if (baseW > 0f) bounds.width() / baseW else 1f
 
     override fun draw(c: Canvas, mmToPx: Float, invalidate: () -> Unit) {
+        val bm = bitmap
+        if (bm != null) {
+            drawBitmap(c, mmToPx, bm)
+            return
+        }
+        // Mientras se carga: un recuadro gris.
         dst.set(bounds.left * mmToPx, bounds.top * mmToPx, bounds.right * mmToPx, bounds.bottom * mmToPx)
         val n = c.save()
         c.rotate(rotation, dst.centerX(), dst.centerY())
-        val bm = bitmap
-        if (bm != null) {
-            c.drawBitmap(bm, null, dst, paint)
-        } else {
-            paint.color = 0x33808080
-            c.drawRect(dst, paint)
-            paint.color = 0xFFFFFFFF.toInt()
-            if (!loading && !failed) load(invalidate)
-        }
+        paint.color = 0x33808080
+        c.drawRect(dst, paint)
+        c.restoreToCount(n)
+        if (!loading && !failed) load(invalidate)
+    }
+
+    /**
+     * Dibuja [bm] en su rectángulo con la rotación, el espejo (sobre el centro, en los ejes del propio elemento: primero
+     * se gira y luego se refleja, así el espejo no depende del ángulo) y la opacidad. También lo usan las miniaturas.
+     */
+    fun drawBitmap(c: Canvas, mmToPx: Float, bm: Bitmap) {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        p.alpha = (opacity.coerceIn(0f, 1f) * 255f).roundToInt()
+        val d = RectF(bounds.left * mmToPx, bounds.top * mmToPx, bounds.right * mmToPx, bounds.bottom * mmToPx)
+        val n = c.save()
+        c.rotate(rotation, d.centerX(), d.centerY())
+        c.scale(if (isFlippedH) -1f else 1f, if (isFlippedV) -1f else 1f, d.centerX(), d.centerY())
+        c.drawBitmap(bm, null, d, p)
         c.restoreToCount(n)
     }
 

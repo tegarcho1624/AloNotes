@@ -341,7 +341,6 @@ class PageManagerActivity : Activity() {
         val pen = Paint(Paint.ANTI_ALIAS_FLAG)
         paint.color = spec.bg
         c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), paint)
-        val dst = RectF()
         for (ly in pl.layers) {
             if (!ly.isVisible) continue
             val a = (ly.opacity.coerceIn(0f, 1f) * 255f).roundToInt()
@@ -350,12 +349,7 @@ class PageManagerActivity : Activity() {
             c.clipRect(0f, 0f, w.toFloat(), h.toFloat())
             for (im in ly.items) {
                 val src = ImageUtil.decodeFile(im.file.path, 512) ?: continue
-                val b = im.bounds
-                dst.set(b.left * k, b.top * k, b.right * k, b.bottom * k)
-                val n2 = c.save()
-                c.rotate(im.rotation, dst.centerX(), dst.centerY())
-                c.drawBitmap(src, null, dst, paint)
-                c.restoreToCount(n2)
+                im.drawBitmap(c, k, src) // mismo dibujo que la hoja: giro, espejo y opacidad
             }
             c.restoreToCount(n)
             for (s in ly.canvas) StrokeRender.draw(c, s, k, pen)

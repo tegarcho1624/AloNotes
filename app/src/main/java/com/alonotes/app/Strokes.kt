@@ -143,7 +143,12 @@ internal class PageLayers(first: List<Stroke>? = null) {
             if (imgDir != null) {
                 for (dto in images.getOrNull(i).orEmpty()) {
                     if (dto.r <= dto.l || dto.b <= dto.t) continue
-                    l.items.add(ImageItem(dto.id, File(imgDir, dto.file), RectF(dto.l, dto.t, dto.r, dto.b), dto.rot, dto.bw))
+                    l.items.add(
+                        ImageItem(
+                            dto.id, File(imgDir, dto.file), RectF(dto.l, dto.t, dto.r, dto.b), dto.rot, dto.bw,
+                            dto.fh, dto.fv, dto.op.coerceIn(0f, 1f)
+                        )
+                    )
                 }
             }
         }

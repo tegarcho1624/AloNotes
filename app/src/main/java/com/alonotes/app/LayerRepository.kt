@@ -26,7 +26,11 @@ internal class ImageDto(
     val r: Float,
     val b: Float,
     val rot: Float = 0f,
-    val bw: Float = 0f
+    val bw: Float = 0f,
+    /** Espejo horizontal / vertical y opacidad (0..1). */
+    val fh: Boolean = false,
+    val fv: Boolean = false,
+    val op: Float = 1f
 )
 
 /** Archivo de capas de una nota (una entrada por hoja). */
@@ -86,7 +90,10 @@ internal object LayerRepository {
                 PageState(
                     pl.selected, ArrayList(pl.layers), pl.layers.map { it.canvas.size },
                     pl.layers.map { ly ->
-                        ly.items.map { ImageDto(it.id, it.file.name, it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom, it.rotation, it.baseW) }
+                        ly.items.map { ImageDto(
+                            it.id, it.file.name, it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom,
+                            it.rotation, it.baseW, it.isFlippedH, it.isFlippedV, it.opacity
+                        ) }
                     }
                 )
             }

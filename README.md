@@ -209,6 +209,13 @@ el ícono del launcher (color fijo).
   Cada uno cierra el menú y muestra "<Nombre>: Próximamente". Íconos nuevos en `Icons.kt`: `LINK`, `CROP`, `CUT`, `FLIP`, `OPACITY`.
 - Se cierra al tocar fuera (el toque además llega a la hoja), al tocar otra vez el botón de 3 puntos, y junto con el botón y el recuadro al deseleccionar.
 
+## Voltear y opacidad de la imagen (v0.13.0)
+- `SelectableItem` ahora tiene `isFlippedH`, `isFlippedV` y `opacity`. `ImageItem` los dibuja en `drawBitmap`: primero gira, luego refleja sobre
+  su centro (en sus propios ejes) y aplica el alpha de la Paint. Se guardan en `layers/<idNota>.json` (`ImageDto`: `fh`, `fv`, `op`; los datos viejos
+  usan los valores por defecto) y viajan con copiar/pegar hojas (`PageClipboard`) y las miniaturas del gestor.
+- Menú de 3 puntos: **Voltear horizontal/vertical** alterna el espejo; **Opacidad** abre un panel flotante con porcentaje y SeekBar (0–100) que
+  cambia la imagen en tiempo real y guarda al soltar o cerrar. El resto sigue en "Próximamente". Un solo popup abierto a la vez.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.
