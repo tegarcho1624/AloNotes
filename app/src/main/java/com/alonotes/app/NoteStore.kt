@@ -233,6 +233,18 @@ internal object NoteStore {
         save(c, all.filter { !gone.contains(it.id) })
     }
 
+    /** Reemplaza la lista de hojas de la nota (orden y datos de cada hoja). Trazos y capas se guardan aparte, en el mismo orden. */
+    @Synchronized
+    fun setPages(c: Context, id: String, list: List<JSONObject>) {
+        val all = load(c)
+        val doc = all.firstOrNull { it.id == id } ?: return
+        val arr = JSONArray()
+        for (o in list) arr.put(o)
+        doc.pages = arr
+        doc.t = System.currentTimeMillis()
+        save(c, all)
+    }
+
     /** Mueve una hoja de la posición [from] a [to] (0 = la primera). Los trazos y capas se reordenan aparte. */
     @Synchronized
     fun movePage(c: Context, id: String, from: Int, to: Int) {

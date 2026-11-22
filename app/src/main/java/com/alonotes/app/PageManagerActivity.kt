@@ -22,6 +22,8 @@ import android.widget.Toast
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.RecyclerView
+import org.json.JSONObject
+import java.io.File
 import java.util.concurrent.Executors
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -33,7 +35,7 @@ import kotlin.math.roundToInt
  *    aún muestran "Próximamente".
  *  - Toque largo + arrastrar: reordena las hojas (se guarda: hojas, trazos y capas). Si se suelta sin mover, abre el menú
  *    de la hoja o de las hojas seleccionadas (por ahora solo avisos).
- * Devuelve a EditorActivity: "changed" (se reordenó algo) y "page" (hoja elegida o -1).
+ * Copiar, pegar y borrar son reales (ver commit()). Devuelve a EditorActivity: "changed" (se cambió algo) y "page" (hoja elegida o -1).
  */
 class PageManagerActivity : Activity() {
     private companion object {
@@ -46,7 +48,7 @@ class PageManagerActivity : Activity() {
     }
 
     /** Una hoja. [key] no cambia al reordenar (sirve para la selección y las miniaturas). */
-    private class Page(val key: Int, val spec: PageViewport.Spec, val layers: PageLayers)
+    private class Page(val key: Int, val spec: PageViewport.Spec, val layers: PageLayers, val json: JSONObject)
 
     private val pages = ArrayList<Page>()
     private val selected = HashSet<Int>()
@@ -58,6 +60,7 @@ class PageManagerActivity : Activity() {
 
     private var docId = ""
     private var openAt = 0
+    private var nextKey = 0
     private var editing = false
     private var changed = false
     private lateinit var doc: DocStrokes
@@ -132,27 +135,33 @@ class PageManagerActivity : Activity() {
                 if (isFinishing) return@runOnUiThread
                 doc = d
                 pages.clear()
-                for ((i, s) in specs.withIndex()) pages.add(Page(i, s, d.pages[i]))
+                for ((i, s) in specs.withIndex()) pages.add(Page(i, s.second, d.pages[i], s.first))
+                nextKey = pages.size
                 adapter.notifyDataSetChanged()
                 if (openAt in pages.indices) rv.scrollToPosition(openAt)
             }
         }.start()
     }
 
-    private fun specsOf(): List<PageViewport.Spec> {
-        val out = ArrayList<PageViewport.Spec>()
+    /** Datos de cada hoja de la nota (JSON) con su tamaño. Una entrada por hoja, en orden (así no se desalinean con los trazos). */
+    private fun specsOf(): List<Pair<JSONObject, PageViewport.Spec>> {
+        val out = ArrayList<Pair<JSONObject, PageViewport.Spec>>()
         val item = NoteStore.get(this, docId) ?: return out
         for (i in 0 until item.pages.length()) {
-            val pg = item.pages.optJSONObject(i) ?: continue
-            var di = 1
-            for (k in DIMS.indices) if (DIMS[k] == pg.optString("d")) di = k
-            val a = MM[di][0]
-            val b = MM[di][1]
-            val land = pg.optString("o") != "P"
-            val bg = pg.optInt("bg", 0xFFFFFFFF.toInt())
-            out.add(if (land) PageViewport.Spec(max(a, b), minOf(a, b), bg) else PageViewport.Spec(minOf(a, b), max(a, b), bg))
+            val pg = item.pages.optJSONObject(i) ?: JSONObject()
+            out.add(Pair(pg, specOf(pg)))
         }
         return out
+    }
+
+    private fun specOf(pg: JSONObject): PageViewport.Spec {
+        var di = 1
+        for (k in DIMS.indices) if (DIMS[k] == pg.optString("d")) di = k
+        val a = MM[di][0]
+        val b = MM[di][1]
+        val land = pg.optString("o") != "P"
+        val bg = pg.optInt("bg", 0xFFFFFFFF.toInt())
+        return if (land) PageViewport.Spec(max(a, b), minOf(a, b), bg) else PageViewport.Spec(minOf(a, b), max(a, b), bg)
     }
 
     // ---------- Barra superior ----------
@@ -182,8 +191,8 @@ class PageManagerActivity : Activity() {
             bar.addView(btn(Icons.REDO) { UiKit.soon(this) }, UiKit.box(this, 44))
             bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
             bar.addView(btn(Icons.SELECT) { UiKit.soon(this) }, UiKit.box(this, 44))
-            bar.addView(btn(Icons.COPY) { UiKit.soon(this) }, UiKit.box(this, 44))
-            bar.addView(btn(Icons.TRASH) { UiKit.soon(this) }, UiKit.box(this, 44))
+            bar.addView(btn(Icons.COPY) { doCopy(selectedPages()) }, UiKit.box(this, 44))
+            bar.addView(btn(Icons.TRASH) { doDelete(selectedPages()) }, UiKit.box(this, 44))
         }
     }
 
@@ -195,6 +204,11 @@ class PageManagerActivity : Activity() {
     }
 
     private fun finishWith(page: Int) {
+        // Si hubo cambios, se espera a que terminen de escribirse antes de volver al editor.
+        if (changed) {
+            StrokeStore.flush()
+            LayerRepository.flush()
+        }
         val i = Intent()
         i.putExtra("changed", changed)
         i.putExtra("page", page)
@@ -397,40 +411,127 @@ class PageManagerActivity : Activity() {
     /** Aplica el movimiento al archivo de la nota, a los trazos y a las capas, y renumera "Page N". */
     private fun finishMove() {
         val to = pages.indexOfFirst { it.key == dragKey }
-        if (to >= 0 && to != dragFrom && dragFrom in doc.pages.indices && to < doc.pages.size) {
-            NoteStore.movePage(this, docId, dragFrom, to)
-            doc.pages.add(to, doc.pages.removeAt(dragFrom))
-            StrokeStore.saveAsync(this, docId, doc)
-            LayerRepository.saveLayers(this, docId, doc)
-            changed = true
-        }
+        if (to >= 0 && to != dragFrom) commit()
         rv.post { adapter.notifyItemRangeChanged(0, pages.size) }
     }
 
-    // ---------- Menú contextual (por ahora solo avisos) ----------
+    // ---------- Operaciones: copiar, pegar, borrar ----------
 
-    private fun plural(n: Int) = if (n == 1) "hoja" else "hojas"
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    private fun selectedPages(): List<Page> = pages.filter { selected.contains(it.key) }
+
+    /** Hojas sobre las que actúa el menú: las marcadas (si son varias y esta es una de ellas) o solo la tocada. */
+    private fun groupOf(key: Int): List<Page> {
+        if (editing && selected.size > 1 && selected.contains(key)) return selectedPages()
+        val p = pages.firstOrNull { it.key == key } ?: return emptyList()
+        return listOf(p)
+    }
+
+    /**
+     * Escribe la nota completa desde UNA sola lista ordenada (`pages`). Cada hoja lleva consigo su JSON de página y su
+     * PageLayers (capas, trazos, imágenes), así que las tres cosas se reconstruyen en el mismo orden y no hay forma de
+     * que los trazos de una hoja acaben en otra: no se usan números de posición guardados, solo el orden de esta lista.
+     * Hojas, trazos y capas se escriben desde la misma foto del estado.
+     */
+    private fun commit() {
+        doc.pages.clear()
+        for (p in pages) doc.pages.add(p.layers)
+        NoteStore.setPages(this, docId, pages.map { it.json })
+        StrokeStore.saveAsync(this, docId, doc)
+        LayerRepository.saveLayers(this, docId, doc)
+        changed = true
+    }
+
+    private fun count(n: Int, one: String, many: String) = if (n == 1) "1 $one" else "$n $many"
+
+    private fun doCopy(list: List<Page>) {
+        if (list.isEmpty()) {
+            toast("Selecciona al menos una hoja")
+            return
+        }
+        // Copia profunda: no se borra ni se cambia nada de las originales.
+        PageClipboard.copy(this, list.map { Pair(it.json, it.layers) })
+        toast(count(list.size, "hoja copiada", "hojas copiadas"))
+    }
+
+    /** [after] = true: justo después de la última hoja del grupo (Pegar adelante); false: justo antes de la primera (Pegar atrás). */
+    private fun doPaste(target: List<Page>, after: Boolean) {
+        if (PageClipboard.isEmpty) {
+            toast("No hay hojas copiadas")
+            return
+        }
+        if (target.isEmpty()) return
+        val idx = if (after) target.maxOf { pages.indexOf(it) } + 1 else target.minOf { pages.indexOf(it) }
+        val made = PageClipboard.paste(this, docId)
+        if (made.isEmpty()) {
+            toast("No se pudo pegar")
+            return
+        }
+        val news = made.map { (js, pl) -> Page(nextKey++, specOf(js), pl, js) }
+        pages.addAll(idx.coerceIn(0, pages.size), news)
+        commit()
+        adapter.notifyDataSetChanged()
+        toast(if (news.size == 1) "Hoja pegada" else "Hojas pegadas")
+    }
+
+    private fun doDelete(list: List<Page>) {
+        if (list.isEmpty()) {
+            toast("Selecciona al menos una hoja")
+            return
+        }
+        // Regla de oro: la nota siempre conserva al menos una hoja.
+        if (list.size >= pages.size) {
+            toast("La nota debe tener al menos una hoja")
+            return
+        }
+        val n = list.size
+        UiKit.confirm(this, "¿Borrar " + count(n, "hoja", "hojas") + "? No se puede deshacer.", "Borrar") {
+            val keys = list.map { it.key }.toSet()
+            pages.removeAll { keys.contains(it.key) }
+            for (k in keys) {
+                selected.remove(k)
+                thumbs.remove(k)
+            }
+            commit()
+            cleanupImages()
+            adapter.notifyDataSetChanged()
+            toast(count(n, "hoja borrada", "hojas borradas"))
+        }
+    }
+
+    /** Borra los archivos de imagen de la nota que ya no usa ninguna hoja (las copias del portapapeles tienen los suyos). */
+    private fun cleanupImages() {
+        try {
+            val keep = HashSet<String>()
+            for (p in pages) for (ly in p.layers.layers) for (im in ly.items) keep.add(im.file.name)
+            File(filesDir, "images/$docId").listFiles()?.forEach { if (!keep.contains(it.name)) it.delete() }
+        } catch (ignored: Exception) {
+            // Los archivos sueltos se borran con la nota.
+        }
+    }
+
+    // ---------- Menú contextual ----------
 
     private fun showMenu(key: Int) {
-        val pos = pages.indexOfFirst { it.key == key }
-        if (pos < 0) return
-        // Con varias hojas marcadas (y esta entre ellas) el menú aplica a todas las marcadas.
-        val n = if (editing && selected.size > 1 && selected.contains(key)) selected.size else 1
+        val group = groupOf(key)
+        if (group.isEmpty()) return
+        val n = group.size
         val ink = getColor(R.color.ink)
         val l = UiKit.vbox(this, 12)
+        val pos = pages.indexOfFirst { it.key == key }
         val title = UiKit.text(this, if (n == 1) "Page " + (pos + 1) else "$n hojas seleccionadas", 17, ink)
         title.setPadding(dp(14), dp(8), dp(14), dp(8))
         l.addView(title)
         val ref = DlgRef()
-        fun say(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
         l.addView(UiKit.sheetRow(this, Icons.COPY, if (n == 1) "Copiar hoja" else "Copiar seleccionadas", ink, ref) {
-            say("Copiando $n ${plural(n)}...")
+            doCopy(group)
         })
         l.addView(UiKit.sheetRow(this, Icons.TRASH, if (n == 1) "Borrar hoja" else "Borrar seleccionadas", getColor(R.color.danger), ref) {
-            say("Borrando $n ${plural(n)}...")
+            doDelete(group)
         })
-        l.addView(UiKit.sheetRow(this, Icons.ARROW_UP, "Pegar adelante", ink, ref) { say("Pegando adelante...") })
-        l.addView(UiKit.sheetRow(this, Icons.ARROW_DOWN, "Pegar atrás", ink, ref) { say("Pegando atrás...") })
+        l.addView(UiKit.sheetRow(this, Icons.ARROW_UP, "Pegar adelante", ink, ref) { doPaste(group, true) })
+        l.addView(UiKit.sheetRow(this, Icons.ARROW_DOWN, "Pegar atrás", ink, ref) { doPaste(group, false) })
         ref.d = UiKit.show(this, l, true)
     }
 }

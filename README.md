@@ -194,6 +194,15 @@ el ícono del launcher (color fijo).
 - Las miniaturas se dibujan en segundo plano (fondo, imágenes y trazos de las capas visibles). `StrokeStore.flush()` y `LayerRepository.flush()`
   esperan a las escrituras pendientes antes de leer.
 
+## Fase 13 — Copiar, pegar y borrar hojas (v0.12.0)
+- **Copiar** (barra o menú) guarda en `PageClipboard` una copia profunda de las hojas marcadas (datos de página, capas, trazos duplicados
+  e imágenes copiadas a `filesDir/clipboard/`). No borra nada. **Pegar adelante / atrás** inserta hojas NUEVAS justo después de la última / antes
+  de la primera hoja del grupo, con trazos e imágenes propios (archivos con nombre nuevo). **Borrar** (barra o menú) pide confirmación y no deja
+  eliminar todas: "La nota debe tener al menos una hoja". Después se borran los archivos de imagen que ya nadie usa.
+- **Sin cruces entre hojas:** `PageManagerActivity.commit()` reconstruye hojas (`NoteStore.setPages`), trazos y capas desde UNA misma lista ordenada
+  (`pages`); cada hoja lleva consigo su JSON y su `PageLayers`. No se guardan números de posición: solo el orden de la lista. El arrastre también usa `commit()`.
+- Al volver al editor se espera a las escrituras pendientes (`flush`) y el editor se recarga.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

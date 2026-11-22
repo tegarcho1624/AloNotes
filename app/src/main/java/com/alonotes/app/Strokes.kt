@@ -96,6 +96,17 @@ internal class PageLayers(first: List<Stroke>? = null) {
         return l
     }
 
+    /** Reemplaza todas las capas (por ejemplo, al pegar una hoja copiada). */
+    fun replaceWith(newLayers: List<Layer>, sel: Int) {
+        if (newLayers.isEmpty()) return
+        layers.clear()
+        layers.addAll(newLayers)
+        var top = layers.size
+        for (l in layers) if (l.id > top) top = l.id.toInt()
+        seq = top
+        selected = sel
+    }
+
     /** Mueve una capa de la posición [from] a [to] (0 = la de abajo). La capa seleccionada sigue siendo la misma. */
     fun move(from: Int, to: Int) {
         if (from == to || from !in layers.indices || to !in layers.indices) return
