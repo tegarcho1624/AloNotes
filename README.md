@@ -203,6 +203,12 @@ el ícono del launcher (color fijo).
   (`pages`); cada hoja lleva consigo su JSON y su `PageLayers`. No se guardan números de posición: solo el orden de la lista. El arrastre también usa `commit()`.
 - Al volver al editor se espera a las escrituras pendientes (`flush`) y el editor se recarga.
 
+## Menú flotante de la imagen (v0.12.1)
+- El botón de 3 puntos junto al recuadro abre un `PopupWindow` vertical (fondo `sf2` redondeado) al lado del botón, con 7 botones en orden:
+  Enlace, Recortar, Recorte libre (tijeras), Voltear horizontal, Voltear vertical (el mismo ícono girado 90°), Opacidad y Bloquear objeto.
+  Cada uno cierra el menú y muestra "<Nombre>: Próximamente". Íconos nuevos en `Icons.kt`: `LINK`, `CROP`, `CUT`, `FLIP`, `OPACITY`.
+- Se cierra al tocar fuera (el toque además llega a la hoja), al tocar otra vez el botón de 3 puntos, y junto con el botón y el recuadro al deseleccionar.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

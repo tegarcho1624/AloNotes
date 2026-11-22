@@ -67,6 +67,11 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val MOVE = 50
         const val EYE_OFF = 51
         const val STAR_FILL = 52
+        const val LINK = 53
+        const val CROP = 54
+        const val CUT = 55
+        const val FLIP = 56
+        const val OPACITY = 57
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -277,6 +282,40 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
             }
             EYEDROPPER -> { poly(c, true, 4, 20, 5.5f, 15.5f, 14, 7, 17, 10, 8.5f, 18.5f); ln(c, 13, 5, 19, 11) }
             NOTES -> { rr(c, 3, 5, 21, 19, 2); ln(c, 7, 10, 17, 10); ln(c, 7, 14, 13, 14) }
+            LINK -> {
+                // Dos eslabones unidos
+                rr(c, 3, 8, 13, 16, 4)
+                rr(c, 11, 8, 21, 16, 4)
+                ln(c, 9, 12, 15, 12)
+            }
+            CROP -> {
+                poly(c, false, 7, 2, 7, 17, 22, 17)
+                poly(c, false, 2, 7, 17, 7, 17, 22)
+            }
+            CUT -> {
+                // Tijeras: dos aros y dos hojas que se cruzan
+                circ(c, 6, 6, 2.6f)
+                circ(c, 6, 18, 2.6f)
+                ln(c, 8, 8, 21, 19)
+                ln(c, 8, 16, 21, 5)
+            }
+            FLIP -> {
+                // Voltear horizontal: dos triángulos reflejados sobre un eje
+                ln(c, 12, 3, 12, 21)
+                poly(c, true, 10, 7, 3, 18, 10, 18)
+                poly(c, true, 14, 7, 21, 18, 14, 18)
+            }
+            OPACITY -> {
+                // Gota
+                q.reset()
+                q.moveTo(12f, 3f)
+                q.cubicTo(9f, 7.5f, 5.5f, 10.5f, 5.5f, 14.5f)
+                q.cubicTo(5.5f, 18.2f, 8.4f, 21f, 12f, 21f)
+                q.cubicTo(15.6f, 21f, 18.5f, 18.2f, 18.5f, 14.5f)
+                q.cubicTo(18.5f, 10.5f, 15f, 7.5f, 12f, 3f)
+                q.close()
+                c.drawPath(q, p)
+            }
             STAR_FILL -> {
                 q.reset()
                 for (i in 0 until 10) {

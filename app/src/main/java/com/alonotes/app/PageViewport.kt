@@ -2,10 +2,13 @@ package com.alonotes.app
 
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
+import android.graphics.drawable.ColorDrawable
+import android.os.SystemClock
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
@@ -15,6 +18,7 @@ import android.view.ViewConfiguration
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.OverScroller
+import android.widget.PopupWindow
 import android.widget.Toast
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -711,7 +715,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     // ---------- Botón flotante de 3 puntos ----------
 
     private fun createMore(): View {
-        val b = UiKit.iconBtn(context, Icons.DOTS_V, ThemeUtils.accentHi(context), 44, 22) { UiKit.soon(context) }
+        val b = UiKit.iconBtn(context, Icons.DOTS_V, ThemeUtils.accentHi(context), 44, 22) { toggleMenu() }
         UiKit.ripple(context, b, 22, context.getColor(R.color.sf3))
         b.elevation = 6f * d
         b.visibility = INVISIBLE
@@ -726,6 +730,90 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun hideMore(b: View) {
         if (b.visibility != INVISIBLE) b.visibility = INVISIBLE
+        dismissMenu() // sin selección no hay menú: desaparecen juntos
+    }
+
+    // ---------- Menú flotante de la imagen (PopupWindow) ----------
+
+    private var menu: PopupWindow? = null
+    private var menuClosedAt = 0L
+
+    private fun dismissMenu() {
+        menu?.dismiss()
+    }
+
+    /** Abre el menú o, si ya está abierto, lo cierra. */
+    private fun toggleMenu() {
+        val b = more ?: return
+        val open = menu
+        if (open != null) {
+            open.dismiss()
+            return
+        }
+        // Tocar el botón con el menú abierto: el toque "fuera" ya lo cerró un instante antes; no se vuelve a abrir.
+        if (SystemClock.uptimeMillis() - menuClosedAt < 300) return
+        showMenu(b)
+    }
+
+    /**
+     * Siete botones en columna, de arriba abajo: enlace, recortar, recorte libre, voltear horizontal, voltear vertical
+     * (el mismo ícono girado 90°), opacidad y bloquear. Por ahora solo cierran el menú y avisan "Próximamente".
+     * Se coloca al lado del botón de 3 puntos (a su izquierda, o a su derecha si no cabe) y centrado con él en vertical.
+     */
+    private fun showMenu(anchor: View) {
+        val ctx = context
+        val ink = ctx.getColor(R.color.ink)
+        val col = LinearLayout(ctx)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(4), dp(4), dp(4), dp(4))
+        col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
+        val items = listOf(
+            Triple(Icons.LINK, "Enlace", 0f),
+            Triple(Icons.CROP, "Recortar", 0f),
+            Triple(Icons.CUT, "Recorte libre", 0f),
+            Triple(Icons.FLIP, "Voltear horizontal", 0f),
+            Triple(Icons.FLIP, "Voltear vertical", 90f),
+            Triple(Icons.OPACITY, "Opacidad", 0f),
+            Triple(Icons.LOCK, "Bloquear objeto", 0f)
+        )
+        for ((icon, name, rot) in items) {
+            val btn = UiKit.iconBtn(ctx, icon, ink, 44, 22) {
+                dismissMenu()
+                Toast.makeText(ctx, "$name: Próximamente", Toast.LENGTH_SHORT).show()
+            }
+            btn.rotation = rot
+            col.addView(btn, LinearLayout.LayoutParams(dp(44), dp(44)))
+        }
+        col.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val w = col.measuredWidth
+        val h = col.measuredHeight
+        val pw = PopupWindow(col, w, h, false)
+        pw.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        // No toma el foco: un toque fuera lo cierra y además llega a la hoja (por ejemplo, para deseleccionar).
+        pw.isFocusable = false
+        pw.isOutsideTouchable = true
+        pw.setOnDismissListener {
+            menu = null
+            menuClosedAt = SystemClock.uptimeMillis()
+        }
+        val loc = IntArray(2)
+        getLocationOnScreen(loc)
+        val gap = dp(8)
+        val bx = loc[0] + anchor.x
+        val by = loc[1] + anchor.y
+        var x = bx - gap - w
+        if (x < loc[0]) x = bx + dp(44) + gap
+        val y = (by + dp(22) - h / 2f).coerceIn(loc[1].toFloat(), max(loc[1].toFloat(), (loc[1] + height - h).toFloat()))
+        pw.showAtLocation(this, Gravity.TOP or Gravity.START, x.roundToInt(), y.roundToInt())
+        menu = pw
+    }
+
+    override fun onDetachedFromWindow() {
+        dismissMenu()
+        super.onDetachedFromWindow()
     }
 
     /**
@@ -767,6 +855,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, bt: Int) {
         super.onLayout(changed, l, t, r, bt)
+        if (changed) dismissMenu() // cambió el tamaño (por ejemplo, al girar la tablet): el menú quedaría mal colocado
         updateMore()
     }
 
