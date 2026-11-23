@@ -94,7 +94,6 @@ class EditorActivity : Activity() {
         }
         viewport.onRecord = { history.record(it) }
         viewport.onEditLink = { showLinkMenu(it) }
-        viewport.onSelAction = { onSelAction(it) }
         viewport.onOpenLink = { openLink(it) }
         history.onChange = { if (::bar.isInitialized) buildBar() } // activa o apaga deshacer/rehacer
         strokes = StrokeStore.load(this, docId)
@@ -228,6 +227,14 @@ class EditorActivity : Activity() {
             PenOptions.buildEraser(this, bar) { buildBar() }
         } else if (tool == 3 && !cont) {
             PenOptions.buildHighlighter(this, bar) { buildBar() }
+        } else if (tool == 4 && !cont) {
+            // Herramienta Seleccionar: en vez de las flechas de página, los 7 íconos de selección (en este orden)
+            val defs = listOf(
+                Pair(Icons.SELECT, SelAct.ALL), Pair(Icons.STAR, SelAct.STICKER), Pair(Icons.COPY, SelAct.COPY),
+                Pair(Icons.PASTE, SelAct.PASTE), Pair(Icons.BRING_FRONT, SelAct.FRONT), Pair(Icons.SEND_BACK, SelAct.BACK),
+                Pair(Icons.TRASH, SelAct.DELETE)
+            )
+            for ((icon, act) in defs) bar.addView(tb(icon, ink) { onSelAction(act) }, UiKit.box(this, 44))
         } else {
             // Flechas de página: anterior / siguiente
             bar.addView(tb(Icons.UNDO, ink) { viewport.prevPage() }, UiKit.box(this, 44))
@@ -258,6 +265,10 @@ class EditorActivity : Activity() {
 
     private fun onSelAction(a: Int) {
         if (total == 0) return
+        if (viewport.inCropMode) {
+            toast("Termina o cancela el recorte primero")
+            return
+        }
         when (a) {
             SelAct.ALL -> if (viewport.selectAll() == 0) toast("No hay objetos en esta capa")
             SelAct.STICKER -> UiKit.soon(this)

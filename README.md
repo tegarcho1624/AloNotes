@@ -268,6 +268,11 @@ el ícono del launcher (color fijo).
 - **Al frente / al fondo** reordenan la lista de objetos de la capa (= orden de dibujo, se guarda en `layers/<idNota>.json`). **Eliminar** quita los objetos de su capa.
 - Todo (menos el sticker) es un paso del historial. Selección y recuadro se actualizan o desaparecen según la acción.
 
+## Barra de selección en la barra superior (v0.19.1)
+- Se quitó la barra flotante de selección. Con la herramienta **Seleccionar**, el espacio central de la barra superior (donde van las flechas de página y el contador)
+  muestra los 7 íconos de selección (mismo orden); con cualquier otra herramienta vuelven las flechas y el contador. Las herramientas de la izquierda y los botones de la
+  derecha no cambian. Mientras hay un recorte en curso, las acciones de selección avisan y no se aplican.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

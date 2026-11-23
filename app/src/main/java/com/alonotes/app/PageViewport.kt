@@ -107,11 +107,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private var gRot0 = 0f
     private val gStart = ArrayList<FloatArray>() // por objeto: l, t, r, b, giro al empezar el gesto
 
-    /** Barra de herramientas de selección (con la herramienta Seleccionar). */
-    private var selBar: View? = null
-
-    /** El usuario tocó un botón de la barra de selección (ver [SelAct]); lo atiende el editor. */
-    var onSelAction: ((Int) -> Unit)? = null
+    /** ¿Está activo un modo de recorte (rectangular o libre)? Las acciones de selección no deben aplicarse mientras tanto. */
+    val inCropMode: Boolean get() = cropMode || lassoMode
 
     // Modo recorte: el recuadro pasa a ser la ventana de recorte; la imagen se mueve por debajo.
     private var cropMode = false
@@ -430,7 +427,6 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             single = v
             attachMore()
             attachCropBar()
-            attachSelBar()
         } else {
             val col = LinearLayout(context)
             col.orientation = LinearLayout.VERTICAL
@@ -1489,50 +1485,6 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (pre != null) onRecord?.invoke(pre)
     }
 
-    // ---------- Barra de herramientas de selección ----------
-
-    private fun createSelBar(): View {
-        val ctx = context
-        val ink = ctx.getColor(R.color.ink)
-        val row = LinearLayout(ctx)
-        row.orientation = LinearLayout.HORIZONTAL
-        row.gravity = Gravity.CENTER
-        row.setPadding(dp(4), dp(4), dp(4), dp(4))
-        row.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 24, ctx.getColor(R.color.ln2))
-        row.elevation = 6f * d
-        // De izquierda a derecha: seleccionar todo, guardar como sticker, copiar, pegar, al frente, al fondo, eliminar.
-        val defs = listOf(
-            Pair(Icons.SELECT, SelAct.ALL), Pair(Icons.STAR, SelAct.STICKER), Pair(Icons.COPY, SelAct.COPY),
-            Pair(Icons.PASTE, SelAct.PASTE), Pair(Icons.BRING_FRONT, SelAct.FRONT), Pair(Icons.SEND_BACK, SelAct.BACK),
-            Pair(Icons.TRASH, SelAct.DELETE)
-        )
-        for ((icon, act) in defs) {
-            row.addView(
-                UiKit.iconBtn(ctx, icon, ink, 42, 22) { onSelAction?.invoke(act) },
-                LinearLayout.LayoutParams(dp(42), dp(42))
-            )
-        }
-        row.visibility = INVISIBLE
-        return row
-    }
-
-    private fun attachSelBar() {
-        val bar = selBar ?: createSelBar().also { selBar = it }
-        if (bar.parent == null) {
-            val lp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
-            lp.topMargin = dp(12)
-            addView(bar, lp)
-        }
-        updateSelBar()
-    }
-
-    /** Solo con la herramienta Seleccionar (y fuera de los modos de recorte, que usan ese mismo lugar). */
-    private fun updateSelBar() {
-        val bar = selBar ?: return
-        val v = if (tool == 4 && !continuous && !cropMode && !lassoMode && bar.parent === this) VISIBLE else INVISIBLE
-        if (bar.visibility != v) bar.visibility = v
-    }
-
     private fun createCropBar(): View {
         val ctx = context
         val row = LinearLayout(ctx)
@@ -1791,7 +1743,6 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
      * el giro, el tamaño, el zoom y el desplazamiento. Se mantiene dentro del contenedor.
      */
     private fun updateMore() {
-        updateSelBar()
         val b = more ?: return
         val item = selItem
         if (item == null || tool != 4 || continuous || cropMode || lassoMode || b.parent !== this) {
