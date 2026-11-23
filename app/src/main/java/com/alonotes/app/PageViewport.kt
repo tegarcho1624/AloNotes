@@ -1503,7 +1503,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         // De izquierda a derecha: seleccionar todo, guardar como sticker, copiar, pegar, al frente, al fondo, eliminar.
         val defs = listOf(
             Pair(Icons.SELECT, SelAct.ALL), Pair(Icons.STAR, SelAct.STICKER), Pair(Icons.COPY, SelAct.COPY),
-            Pair(Icons.PASTE, SelAct.PASTE), Pair(Icons.FRONT, SelAct.FRONT), Pair(Icons.BACK, SelAct.BACK),
+            Pair(Icons.PASTE, SelAct.PASTE), Pair(Icons.BRING_FRONT, SelAct.FRONT), Pair(Icons.SEND_BACK, SelAct.BACK),
             Pair(Icons.TRASH, SelAct.DELETE)
         )
         for ((icon, act) in defs) {

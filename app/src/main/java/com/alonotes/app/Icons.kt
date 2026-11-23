@@ -73,8 +73,8 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val FLIP = 56
         const val OPACITY = 57
         const val PASTE = 58
-        const val FRONT = 59
-        const val BACK = 60
+        const val BRING_FRONT = 59
+        const val SEND_BACK = 60
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -292,13 +292,13 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
                 ln(c, 8, 12, 16, 12)
                 ln(c, 8, 16, 14, 16)
             }
-            FRONT -> {
+            BRING_FRONT -> {
                 // Traer al frente: el cuadro de adelante, relleno
                 rr(c, 3, 3, 14, 14, 2)
                 p.style = Paint.Style.FILL
                 rr(c, 10, 10, 21, 21, 2)
             }
-            BACK -> {
+            SEND_BACK -> {
                 // Enviar al fondo: el cuadro de atrás, relleno
                 p.style = Paint.Style.FILL
                 rr(c, 3, 3, 14, 14, 2)
