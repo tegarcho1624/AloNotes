@@ -259,6 +259,15 @@ el ícono del launcher (color fijo).
   3 puntos, el círculo y la edición). Bloquear/desbloquear es un paso del historial. Una imagen bloqueada sigue pudiéndose seleccionar (para desbloquearla).
 - Todo esto solo se ve con la herramienta Seleccionar; con cualquier otra desaparece, esté o no bloqueada. Los enlaces, la opacidad, el volteo y el recorte no cambian.
 
+## Barra de selección y selección múltiple (v0.19.0)
+- Con la herramienta **Seleccionar** aparece, flotando arriba al centro de la hoja, una barra con 7 botones (izq. a der.): Seleccionar todo, Guardar como sticker
+  ("Próximamente"), Copiar, Pegar, Traer al frente, Enviar al fondo y Eliminar. Se oculta con cualquier otra herramienta y durante los modos de recorte.
+- **Seleccionar todo** elige los objetos (sin bloquear) de la capa actual. Con 2 o más se dibuja un recuadro de GRUPO con sus 8 tiradores y círculo de giro: mover,
+  escalar (uniforme, respecto al punto opuesto) y girar el grupo (cada objeto desde su estado inicial). El botón de 3 puntos y el candado son solo de un objeto.
+- **Copiar/Pegar** (`ObjectClipboard`): copias independientes (id y archivo nuevos); se pegan en la capa seleccionada al centro de la hoja, cada pegado se corre 10 mm.
+- **Al frente / al fondo** reordenan la lista de objetos de la capa (= orden de dibujo, se guarda en `layers/<idNota>.json`). **Eliminar** quita los objetos de su capa.
+- Todo (menos el sticker) es un paso del historial. Selección y recuadro se actualizan o desaparecen según la acción.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

@@ -216,3 +216,14 @@ internal object ImageFiles {
         }
     }
 }
+
+/** Acciones de la barra de selección (de izquierda a derecha). */
+internal object SelAct {
+    const val ALL = 0
+    const val STICKER = 1
+    const val COPY = 2
+    const val PASTE = 3
+    const val FRONT = 4
+    const val BACK = 5
+    const val DELETE = 6
+}

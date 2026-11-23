@@ -64,6 +64,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 if (v != 4) {
                     cancelCrop()
                     selItem = null
+                    multiSel.clear()
                 }
             }
             field = v
@@ -95,8 +96,22 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     /** Se llama al terminar de mover, redimensionar o girar un elemento (hay que guardar las capas). */
     var onItemsChanged: (() -> Unit)? = null
 
-    /** Elemento seleccionado (herramienta Seleccionar). */
+    /** Elemento seleccionado (herramienta Seleccionar). Con varios seleccionados es null y se usa [multiSel]. */
     private var selItem: SelectableItem? = null
+
+    /** Selección múltiple (2 o más): su caja de grupo es [grpB] con el giro [grpRot]. */
+    private val multiSel = ArrayList<SelectableItem>()
+    private val grpB = RectF()
+    private var grpRot = 0f
+    private val gB0 = RectF()
+    private var gRot0 = 0f
+    private val gStart = ArrayList<FloatArray>() // por objeto: l, t, r, b, giro al empezar el gesto
+
+    /** Barra de herramientas de selección (con la herramienta Seleccionar). */
+    private var selBar: View? = null
+
+    /** El usuario tocó un botón de la barra de selección (ver [SelAct]); lo atiende el editor. */
+    var onSelAction: ((Int) -> Unit)? = null
 
     // Modo recorte: el recuadro pasa a ser la ventana de recorte; la imagen se mueve por debajo.
     private var cropMode = false
@@ -196,6 +211,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         const val M_CROP_RESIZE = 4
         const val M_CROP_MOVE = 5
         const val M_LASSO = 6
+        const val M_GMOVE = 7
+        const val M_GRESIZE = 8
+        const val M_GROT = 9
 
         // Tiradores: 0 sup-izq, 1 sup, 2 sup-der, 3 izq, 4 der, 5 inf-izq, 6 inf, 7 inf-der (8 = círculo de giro).
         val HX = intArrayOf(-1, 0, 1, -1, 1, -1, 0, 1)
@@ -223,6 +241,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         endManip()
         cancelCrop()
         selItem = null
+        multiSel.clear()
         specs = list
         index = index.coerceIn(0, max(0, list.size - 1))
         resetTransform()
@@ -257,22 +276,86 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             selItem = null
             manip = 0
         }
+        if (multiSel.isNotEmpty()) {
+            multiSel.retainAll { itemExists(it) }
+            if (multiSel.size == 1) {
+                selItem = multiSel[0]
+                multiSel.clear()
+            } else if (multiSel.isNotEmpty()) {
+                computeGroup()
+            }
+        }
         single?.invalidate()
         updateMore()
         invalidate()
     }
 
-    /** Id de la imagen seleccionada (para volver a seleccionarla después de deshacer o rehacer). */
-    fun selectedId(): String? = selItem?.id
+    /** Objetos seleccionados (uno o varios). */
+    fun currentSelection(): List<SelectableItem> {
+        if (multiSel.isNotEmpty()) return ArrayList(multiSel)
+        val one = selItem
+        return if (one != null) listOf(one) else emptyList()
+    }
 
-    /** Tras restaurar la hoja las imágenes son objetos nuevos: vuelve a seleccionar la de ese id (si sigue y la herramienta es Seleccionar). */
-    fun reselect(id: String?) {
-        var found: SelectableItem? = null
-        val pl = strokes?.page(index)
-        if (id != null && tool == 4 && pl != null) {
-            for (ly in pl.layers) for (im in ly.items) if (im.id == id) found = im
+    /** Selecciona [items] (de la hoja actual): ninguno, uno (selección normal) o varios (recuadro de grupo). */
+    fun setSelection(items: List<SelectableItem>) {
+        cancelCrop()
+        manip = 0
+        multiSel.clear()
+        selItem = null
+        if (items.size == 1) {
+            selItem = items[0]
+        } else if (items.size > 1) {
+            multiSel.addAll(items)
+            computeGroup()
         }
-        selectItem(found)
+        updateMore()
+        single?.invalidate()
+        invalidate()
+    }
+
+    /** Selecciona todos los objetos (sin bloquear) de la capa actual. Devuelve cuántos son. */
+    fun selectAll(): Int {
+        val pl = strokes?.page(index) ?: return 0
+        val items = pl.layers[pl.selected].items.filter { !it.isLocked }
+        setSelection(items)
+        return items.size
+    }
+
+    /** Ids de lo seleccionado (para volver a seleccionarlo después de deshacer o rehacer). */
+    fun selectedIds(): List<String> = currentSelection().map { it.id }
+
+    /** Tras restaurar la hoja los objetos son nuevos: vuelve a seleccionar los de esos ids (si siguen y la herramienta es Seleccionar). */
+    fun reselect(ids: List<String>) {
+        val found = ArrayList<SelectableItem>()
+        val pl = strokes?.page(index)
+        if (tool == 4 && pl != null && ids.isNotEmpty()) {
+            for (ly in pl.layers) for (im in ly.items) if (ids.contains(im.id)) found.add(im)
+        }
+        setSelection(found)
+    }
+
+    /** Caja que abarca a todos los objetos de la selección múltiple (sin giro al empezar). */
+    private fun computeGroup() {
+        var x0 = Float.MAX_VALUE
+        var y0 = Float.MAX_VALUE
+        var x1 = -Float.MAX_VALUE
+        var y1 = -Float.MAX_VALUE
+        for (im in multiSel) {
+            val b = im.bounds
+            for (k in 0 until 4) {
+                val p = Xf.toPage(
+                    b.centerX(), b.centerY(), im.rotation,
+                    (if (k % 2 == 0) -1 else 1) * b.width() / 2f, (if (k < 2) -1 else 1) * b.height() / 2f
+                )
+                if (p[0] < x0) x0 = p[0]
+                if (p[0] > x1) x1 = p[0]
+                if (p[1] < y0) y0 = p[1]
+                if (p[1] > y1) y1 = p[1]
+            }
+        }
+        grpB.set(x0, y0, x1, y1)
+        grpRot = 0f
     }
 
     /** Sale de los modos de recorte y suelta cualquier gesto, sin cambios (antes de deshacer o rehacer). */
@@ -289,6 +372,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     /** Selecciona un elemento de la hoja actual (null = quitar la selección). */
     fun selectItem(item: SelectableItem?) {
         cancelCrop()
+        multiSel.clear()
         selItem = item
         manip = 0
         single?.invalidate()
@@ -346,6 +430,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             single = v
             attachMore()
             attachCropBar()
+            attachSelBar()
         } else {
             val col = LinearLayout(context)
             col.orientation = LinearLayout.VERTICAL
@@ -810,6 +895,21 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             beginCrop(e, p)
             return
         }
+        if (multiSel.isNotEmpty()) {
+            // Selección múltiple: el recuadro de grupo se mueve, se redimensiona y gira como el de un solo objeto.
+            val gpts = handlePtsFor(grpB, grpRot)
+            val gh = if (gpts != null) hitHandle(gpts, e.x, e.y) else -1
+            if (gh >= 0) {
+                startGroupManip(if (gh == 8) M_GROT else M_GRESIZE, gh, p)
+                return
+            }
+            val gl = Xf.toLocal(grpB.centerX(), grpB.centerY(), grpRot, p[0], p[1])
+            if (kotlin.math.abs(gl[0]) <= grpB.width() / 2f && kotlin.math.abs(gl[1]) <= grpB.height() / 2f) {
+                startGroupManip(M_GMOVE, -1, p)
+                return
+            }
+            multiSel.clear() // un toque fuera: se sigue como una selección normal (otra imagen o ninguna)
+        }
         val sel = selItem
         if (sel != null) {
             if (sel.isLocked) {
@@ -829,6 +929,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
         }
         val hit = hitItem(p[0], p[1])
+        multiSel.clear()
         selItem = hit
         // Se selecciona y ya se puede arrastrar (salvo que esté bloqueada).
         if (hit != null && !hit.isLocked) startManip(hit, M_MOVE, -1, p)
@@ -850,6 +951,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     }
 
     private fun selMove(e: MotionEvent) {
+        if (manip == M_GMOVE || manip == M_GRESIZE || manip == M_GROT) {
+            groupMove(e)
+            return
+        }
         val item = selItem ?: return
         // El lazo registra desde el primer movimiento; lo demás espera a superar el umbral (un toque no mueve nada).
         if (manip != M_LASSO && !mMoved && hypot(e.x - sx, e.y - sy) < touchSlop) return
@@ -897,7 +1002,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             mMoved = false
             // En los modos de recorte no se guarda nada hasta confirmar.
             if (!cropMode && !lassoMode) {
-                if (kind == M_MOVE || kind == M_RESIZE || kind == M_ROTATE) {
+                if (kind == M_MOVE || kind == M_RESIZE || kind == M_ROTATE || kind == M_GMOVE || kind == M_GRESIZE || kind == M_GROT) {
                     val pre = manipPre
                     if (pre != null) onRecord?.invoke(pre)
                 }
@@ -905,6 +1010,98 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 onItemsChanged?.invoke()
             }
         }
+    }
+
+    // ---------- Selección múltiple: mover, redimensionar y girar el grupo ----------
+
+    private fun startGroupManip(kind: Int, handle: Int, p: FloatArray) {
+        manipPre = snapNow()
+        manip = kind
+        mHandle = handle
+        mP0x = p[0]
+        mP0y = p[1]
+        gB0.set(grpB)
+        gRot0 = grpRot
+        gStart.clear()
+        for (im in multiSel) gStart.add(floatArrayOf(im.bounds.left, im.bounds.top, im.bounds.right, im.bounds.bottom, im.rotation))
+        mAng0 = Xf.angleDeg(p[0] - gB0.centerX(), p[1] - gB0.centerY())
+        mMoved = false
+        invalidate()
+    }
+
+    /**
+     * Cada objeto se calcula SIEMPRE desde su estado al empezar el gesto (no se acumula error):
+     *  - Mover: todos y la caja se desplazan lo mismo.
+     *  - Redimensionar: escala UNIFORME f respecto al punto opuesto al tirador (el ancla A): centro' = A + f·(centro − A),
+     *    ancho' = f·ancho, alto' = f·alto. f sale de la proyección del puntero sobre la diagonal (esquinas) o del eje (bordes).
+     *    Así los objetos girados no se deforman.
+     *  - Girar: todos giran φ alrededor del centro de la caja: centro' = C + R(φ)·(centro − C), giro' = giro + φ.
+     */
+    private fun groupMove(e: MotionEvent) {
+        if (!mMoved && hypot(e.x - sx, e.y - sy) < touchSlop) return
+        val p = toPage(e.x, e.y) ?: return
+        mMoved = true
+        when (manip) {
+            M_GMOVE -> {
+                val dx = p[0] - mP0x
+                val dy = p[1] - mP0y
+                for ((i, im) in multiSel.withIndex()) {
+                    val s0 = gStart[i]
+                    im.bounds.set(s0[0] + dx, s0[1] + dy, s0[2] + dx, s0[3] + dy)
+                }
+                grpB.set(gB0)
+                grpB.offset(dx, dy)
+            }
+            M_GRESIZE -> {
+                val hx = HX[mHandle]
+                val hy = HY[mHandle]
+                val gw = gB0.width()
+                val gh = gB0.height()
+                val a = Xf.toPage(gB0.centerX(), gB0.centerY(), gRot0, -hx * gw / 2f, -hy * gh / 2f)
+                val v = Xf.rotate(p[0] - a[0], p[1] - a[1], -gRot0)
+                var f = if (hx != 0 && hy != 0) {
+                    val dx = hx * gw
+                    val dy = hy * gh
+                    (v[0] * dx + v[1] * dy) / (dx * dx + dy * dy)
+                } else if (hx != 0) {
+                    hx * v[0] / gw
+                } else {
+                    hy * v[1] / gh
+                }
+                f = f.coerceIn(Xf.MIN_MM / minOf(gw, gh), 20f)
+                for ((i, im) in multiSel.withIndex()) {
+                    val s0 = gStart[i]
+                    val cx = (s0[0] + s0[2]) / 2f
+                    val cy = (s0[1] + s0[3]) / 2f
+                    val nx = a[0] + f * (cx - a[0])
+                    val ny = a[1] + f * (cy - a[1])
+                    val hw = f * (s0[2] - s0[0]) / 2f
+                    val hh = f * (s0[3] - s0[1]) / 2f
+                    im.bounds.set(nx - hw, ny - hh, nx + hw, ny + hh)
+                }
+                val gx = a[0] + f * (gB0.centerX() - a[0])
+                val gy = a[1] + f * (gB0.centerY() - a[1])
+                grpB.set(gx - f * gw / 2f, gy - f * gh / 2f, gx + f * gw / 2f, gy + f * gh / 2f)
+            }
+            M_GROT -> {
+                val cx = gB0.centerX()
+                val cy = gB0.centerY()
+                val phi = Xf.angleDeg(p[0] - cx, p[1] - cy) - mAng0
+                for ((i, im) in multiSel.withIndex()) {
+                    val s0 = gStart[i]
+                    val r = Xf.rotate((s0[0] + s0[2]) / 2f - cx, (s0[1] + s0[3]) / 2f - cy, phi)
+                    val nx = cx + r[0]
+                    val ny = cy + r[1]
+                    val hw = (s0[2] - s0[0]) / 2f
+                    val hh = (s0[3] - s0[1]) / 2f
+                    im.bounds.set(nx - hw, ny - hh, nx + hw, ny + hh)
+                    im.rotation = Xf.normalize(s0[4] + phi)
+                }
+                grpRot = Xf.normalize(gRot0 + phi)
+            }
+        }
+        single?.invalidate()
+        invalidate()
     }
 
     // ---------- Modo recorte ----------
@@ -1292,6 +1489,50 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (pre != null) onRecord?.invoke(pre)
     }
 
+    // ---------- Barra de herramientas de selección ----------
+
+    private fun createSelBar(): View {
+        val ctx = context
+        val ink = ctx.getColor(R.color.ink)
+        val row = LinearLayout(ctx)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.gravity = Gravity.CENTER
+        row.setPadding(dp(4), dp(4), dp(4), dp(4))
+        row.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 24, ctx.getColor(R.color.ln2))
+        row.elevation = 6f * d
+        // De izquierda a derecha: seleccionar todo, guardar como sticker, copiar, pegar, al frente, al fondo, eliminar.
+        val defs = listOf(
+            Pair(Icons.SELECT, SelAct.ALL), Pair(Icons.STAR, SelAct.STICKER), Pair(Icons.COPY, SelAct.COPY),
+            Pair(Icons.PASTE, SelAct.PASTE), Pair(Icons.FRONT, SelAct.FRONT), Pair(Icons.BACK, SelAct.BACK),
+            Pair(Icons.TRASH, SelAct.DELETE)
+        )
+        for ((icon, act) in defs) {
+            row.addView(
+                UiKit.iconBtn(ctx, icon, ink, 42, 22) { onSelAction?.invoke(act) },
+                LinearLayout.LayoutParams(dp(42), dp(42))
+            )
+        }
+        row.visibility = INVISIBLE
+        return row
+    }
+
+    private fun attachSelBar() {
+        val bar = selBar ?: createSelBar().also { selBar = it }
+        if (bar.parent == null) {
+            val lp = FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+            lp.topMargin = dp(12)
+            addView(bar, lp)
+        }
+        updateSelBar()
+    }
+
+    /** Solo con la herramienta Seleccionar (y fuera de los modos de recorte, que usan ese mismo lugar). */
+    private fun updateSelBar() {
+        val bar = selBar ?: return
+        val v = if (tool == 4 && !continuous && !cropMode && !lassoMode && bar.parent === this) VISIBLE else INVISIBLE
+        if (bar.visibility != v) bar.visibility = v
+    }
+
     private fun createCropBar(): View {
         val ctx = context
         val row = LinearLayout(ctx)
@@ -1550,6 +1791,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
      * el giro, el tamaño, el zoom y el desplazamiento. Se mantiene dentro del contenedor.
      */
     private fun updateMore() {
+        updateSelBar()
         val b = more ?: return
         val item = selItem
         if (item == null || tool != 4 || continuous || cropMode || lassoMode || b.parent !== this) {
@@ -1603,8 +1845,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Recuadro, 8 tiradores y círculo de giro del elemento seleccionado (se dibuja encima de la hoja, sin recorte). */
     private fun drawSelection(c: Canvas) {
-        val item = selItem ?: return
         if (tool != 4 || continuous) return
+        if (multiSel.isNotEmpty() && !cropMode && !lassoMode) {
+            drawMulti(c)
+            return
+        }
+        val item = selItem ?: return
         if (lassoMode) {
             drawLasso(c)
             return
@@ -1634,6 +1880,40 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
             return
         }
+        c.drawLine(pts[2], pts[3], pts[16], pts[17], ovStroke)
+        for (i in 0 until 8) {
+            ovFill.color = ink
+            c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovFill)
+            c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovStroke)
+        }
+        ovFill.color = acc
+        c.drawCircle(pts[16], pts[17], 9f * d, ovFill)
+        ovStroke.color = ink
+        c.drawCircle(pts[16], pts[17], 9f * d, ovStroke)
+    }
+
+    /** Selección múltiple: un contorno fino por objeto y la caja del grupo con sus 8 tiradores y el círculo de giro. */
+    private fun drawMulti(c: Canvas) {
+        val pts = handlePtsFor(grpB, grpRot) ?: return
+        val acc = ThemeUtils.accentHi(context)
+        val ink = context.getColor(R.color.ink)
+        ovStroke.color = acc
+        val w0 = ovStroke.strokeWidth
+        ovStroke.strokeWidth = 1f * d
+        ovStroke.alpha = 0x99
+        for (im in multiSel) {
+            val q = pageToScreenQuad(im.bounds, im.rotation) ?: continue
+            c.drawPath(q, ovStroke)
+        }
+        ovStroke.strokeWidth = w0
+        ovStroke.color = acc
+        val path = Path()
+        path.moveTo(pts[0], pts[1])
+        path.lineTo(pts[4], pts[5])
+        path.lineTo(pts[14], pts[15])
+        path.lineTo(pts[10], pts[11])
+        path.close()
+        c.drawPath(path, ovStroke)
         c.drawLine(pts[2], pts[3], pts[16], pts[17], ovStroke)
         for (i in 0 until 8) {
             ovFill.color = ink
@@ -1767,6 +2047,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         endManip()
         cancelCrop()
         selItem = null
+        multiSel.clear()
         resetTransform()
         rebuild()
         single?.let {

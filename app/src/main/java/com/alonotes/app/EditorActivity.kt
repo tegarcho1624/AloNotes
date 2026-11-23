@@ -94,6 +94,7 @@ class EditorActivity : Activity() {
         }
         viewport.onRecord = { history.record(it) }
         viewport.onEditLink = { showLinkMenu(it) }
+        viewport.onSelAction = { onSelAction(it) }
         viewport.onOpenLink = { openLink(it) }
         history.onChange = { if (::bar.isInitialized) buildBar() } // activa o apaga deshacer/rehacer
         strokes = StrokeStore.load(this, docId)
@@ -251,6 +252,105 @@ class EditorActivity : Activity() {
         dv.setMargins(dp(8), 0, dp(8), 0)
         bar.addView(div, dv)
         bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+    }
+
+    // ---------- Barra de selección: copiar, pegar, orden y eliminar ----------
+
+    private fun onSelAction(a: Int) {
+        if (total == 0) return
+        when (a) {
+            SelAct.ALL -> if (viewport.selectAll() == 0) toast("No hay objetos en esta capa")
+            SelAct.STICKER -> UiKit.soon(this)
+            SelAct.COPY -> copySelection()
+            SelAct.PASTE -> pasteObjects()
+            SelAct.FRONT -> reorderSelection(true)
+            SelAct.BACK -> reorderSelection(false)
+            SelAct.DELETE -> deleteSelection()
+        }
+    }
+
+    private fun selectedImages(): List<ImageItem> = viewport.currentSelection().filterIsInstance<ImageItem>()
+
+    private fun copySelection() {
+        val sel = selectedImages()
+        if (sel.isEmpty()) {
+            toast("Selecciona uno o varios objetos")
+            return
+        }
+        ObjectClipboard.copy(this, sel)
+        toast(if (sel.size == 1) "1 objeto copiado" else sel.size.toString() + " objetos copiados")
+    }
+
+    /** Pega en la capa seleccionada, al centro de la hoja (cada pegado se corre un poco), y deja lo pegado seleccionado. */
+    private fun pasteObjects() {
+        if (ObjectClipboard.isEmpty) {
+            toast("No hay objetos copiados")
+            return
+        }
+        val sp = viewport.pageSpec() ?: return
+        val pl = strokes.page(viewport.index)
+        val layer = pl.layers[pl.selected]
+        if (!layer.isVisible) {
+            toast("La capa está oculta")
+            return
+        }
+        val made = ObjectClipboard.paste(this, docId, sp.wMm / 2f, sp.hMm / 2f)
+        if (made.isEmpty()) {
+            toast("No se pudo pegar")
+            return
+        }
+        val pre = pl.snapshot()
+        layer.items.addAll(made)
+        history.record(pre)
+        viewport.setSelection(made)
+        viewport.refreshPage()
+        persistLayers()
+        toast(if (made.size == 1) "1 objeto pegado" else made.size.toString() + " objetos pegados")
+    }
+
+    /** Lleva lo seleccionado al final de la lista de su capa (al frente) o al inicio (al fondo); el orden de la lista es el orden de dibujo. */
+    private fun reorderSelection(front: Boolean) {
+        val sel = selectedImages()
+        if (sel.isEmpty()) {
+            toast("Selecciona uno o varios objetos")
+            return
+        }
+        val pl = strokes.page(viewport.index)
+        val pre = pl.snapshot()
+        val set = HashSet<ImageItem>(sel)
+        var changed = false
+        for (ly in pl.layers) {
+            val mine = ly.items.filter { set.contains(it) }
+            if (mine.isEmpty()) continue
+            val before = ArrayList(ly.items)
+            ly.items.removeAll(mine.toSet())
+            if (front) ly.items.addAll(mine) else ly.items.addAll(0, mine)
+            if (before != ly.items) changed = true
+        }
+        if (!changed) {
+            toast(if (front) "Ya está al frente" else "Ya está al fondo")
+            return
+        }
+        history.record(pre)
+        viewport.refreshPage()
+        persistLayers()
+    }
+
+    private fun deleteSelection() {
+        val sel = selectedImages()
+        if (sel.isEmpty()) {
+            toast("Selecciona uno o varios objetos")
+            return
+        }
+        val pl = strokes.page(viewport.index)
+        val pre = pl.snapshot()
+        val set = HashSet<ImageItem>(sel)
+        for (ly in pl.layers) ly.items.removeAll(set)
+        history.record(pre)
+        viewport.setSelection(emptyList())
+        viewport.refreshPage()
+        persistLayers()
+        toast(if (sel.size == 1) "1 objeto eliminado" else sel.size.toString() + " objetos eliminados")
     }
 
     // ---------- Enlaces de imagen ----------
@@ -434,12 +534,12 @@ class EditorActivity : Activity() {
     private fun stepHistory(undo: Boolean) {
         if (total == 0 || viewport.continuous) return
         val pl = strokes.page(viewport.index)
-        val selId = viewport.selectedId()
+        val selIds = viewport.selectedIds()
         viewport.cancelModes()
         val snap = (if (undo) history.undo(pl.snapshot()) else history.redo(pl.snapshot())) ?: return
         pl.restoreSnapshot(snap)
         syncLayers() // panel de capas e ícono
-        viewport.reselect(selId)
+        viewport.reselect(selIds)
         viewport.refreshPage()
         persistStrokes()
         persistLayers()

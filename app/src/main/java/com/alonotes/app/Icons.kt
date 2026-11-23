@@ -72,6 +72,9 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val CUT = 55
         const val FLIP = 56
         const val OPACITY = 57
+        const val PASTE = 58
+        const val FRONT = 59
+        const val BACK = 60
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -282,6 +285,26 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
             }
             EYEDROPPER -> { poly(c, true, 4, 20, 5.5f, 15.5f, 14, 7, 17, 10, 8.5f, 18.5f); ln(c, 13, 5, 19, 11) }
             NOTES -> { rr(c, 3, 5, 21, 19, 2); ln(c, 7, 10, 17, 10); ln(c, 7, 14, 13, 14) }
+            PASTE -> {
+                // Portapapeles con pinza y renglones
+                rr(c, 5, 5, 19, 21, 2)
+                rr(c, 9, 2, 15, 6, 1.5f)
+                ln(c, 8, 12, 16, 12)
+                ln(c, 8, 16, 14, 16)
+            }
+            FRONT -> {
+                // Traer al frente: el cuadro de adelante, relleno
+                rr(c, 3, 3, 14, 14, 2)
+                p.style = Paint.Style.FILL
+                rr(c, 10, 10, 21, 21, 2)
+            }
+            BACK -> {
+                // Enviar al fondo: el cuadro de atrás, relleno
+                p.style = Paint.Style.FILL
+                rr(c, 3, 3, 14, 14, 2)
+                p.style = Paint.Style.STROKE
+                rr(c, 10, 10, 21, 21, 2)
+            }
             LINK -> {
                 // Dos eslabones unidos
                 rr(c, 3, 8, 13, 16, 4)
