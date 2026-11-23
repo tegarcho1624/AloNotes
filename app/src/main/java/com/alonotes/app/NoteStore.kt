@@ -117,6 +117,9 @@ internal object NoteStore {
             .sortedByDescending { it.t }
     }
 
+    /** Todas las notas (sin carpetas) de cualquier categoría, por nombre: destinos de los enlaces internos. */
+    fun notesForLinks(c: Context): List<Item> = load(c).filter { !it.folder }.sortedBy { it.name.lowercase() }
+
     /** Notas favoritas de todas las categorías, las más recientes primero. */
     fun favorites(c: Context): List<Item> {
         val items = load(c)

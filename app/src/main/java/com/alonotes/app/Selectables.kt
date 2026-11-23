@@ -133,8 +133,17 @@ internal class ImageItem(
     var baseW: Float,
     override var isFlippedH: Boolean = false,
     override var isFlippedV: Boolean = false,
-    override var opacity: Float = 1f
+    override var opacity: Float = 1f,
+    /** Enlace de la imagen: [LINK_NONE], [LINK_WEB] (linkData = URL) o [LINK_INTERNAL] (linkData = "idNota|númeroDeHoja"). */
+    var linkType: Int = LINK_NONE,
+    var linkData: String = ""
 ) : SelectableItem {
+    companion object {
+        const val LINK_NONE = 0
+        const val LINK_WEB = 1
+        const val LINK_INTERNAL = 2
+    }
+
     var bitmap: Bitmap? = null
     private var loading = false
     private var failed = false

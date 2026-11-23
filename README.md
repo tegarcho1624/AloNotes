@@ -242,6 +242,16 @@ el ícono del launcher (color fijo).
 - Botones: las flechas curvas de arriba a la derecha (`ROT_L` deshacer, `ROT_R` rehacer); en gris si no hay nada o en vista continua.
 - Al recortar, el archivo anterior ya no se borra (el historial lo necesita). Los archivos de imagen sin uso (de más de un minuto) se limpian al abrir la nota.
 
+## Enlaces en imágenes (v0.17.0)
+- `ImageItem` tiene `linkType` (`LINK_NONE`, `LINK_WEB`, `LINK_INTERNAL`) y `linkData` (URL, o `idNota|númeroDeHoja`). Se guardan en `layers/<idNota>.json`
+  (`ImageDto.lt`/`ld`), viajan con copiar/pegar hojas y con el historial de deshacer.
+- Menú de 3 puntos → **Enlace**: Enlace Web (pide la URL; solo http/https), Enlace Interno (lista con las hojas de esta nota y las otras notas; de una nota con
+  varias hojas se elige la hoja) y Quitar enlace. Los diálogos están en `EditorActivity`.
+- **Abrir:** con lápiz, marcador o sin herramienta, un toque corto y quieto (< 450 ms) sobre una imagen con enlace (capa visible) lo abre en vez de dibujar:
+  el trazo se descarta. Web → `ACTION_VIEW`; interno → otra hoja de la misma nota (`goToPage`) o `EditorActivity` de la otra nota con "id" y "page".
+  Una imagen SIN enlace no intercepta nada: el lápiz dibuja encima como siempre. Con la herramienta Seleccionar las imágenes se seleccionan como antes.
+- Al mantener presionada una imagen con enlace aparece un ícono de cadena en su esquina superior derecha.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

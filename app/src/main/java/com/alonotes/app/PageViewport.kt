@@ -73,6 +73,20 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     var strokes: DocStrokes? = null
     var onChanged: ((Int) -> Unit)? = null
 
+    /** Pide al editor mostrar el menú de enlace de la imagen seleccionada. */
+    var onEditLink: ((ImageItem) -> Unit)? = null
+
+    /** Se tocó una imagen con enlace (herramienta lápiz, marcador o ninguna): el editor lo abre. */
+    var onOpenLink: ((ImageItem) -> Unit)? = null
+
+    private var downTime = 0L
+    private var linkCand: ImageItem? = null // imagen con enlace bajo el dedo
+    private var linkHint: ImageItem? = null // ... ya mantenida un momento: se muestra el ícono de cadena
+    private val linkHintRun = Runnable {
+        linkHint = linkCand
+        invalidate()
+    }
+
     /** Se llama al completarse una acción, con la foto de la hoja de ANTES (para el historial de deshacer). */
     var onRecord: ((PageSnap) -> Unit)? = null
 
@@ -621,6 +635,64 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             commitLive()
         }
         penDown = false
+    }
+
+    /** Tira el trazo en curso sin guardarlo (cuando el toque era para abrir un enlace). */
+    private fun discardStroke() {
+        live = null
+        single?.live = null
+        single?.invalidate()
+        penDown = false
+    }
+
+    // ---------- Enlaces de imagen ----------
+
+    /** Imagen con enlace bajo el punto tocado (capas visibles, de arriba abajo), o null. Las imágenes sin enlace no cuentan. */
+    private fun linkAt(e: MotionEvent): ImageItem? {
+        val p = toPage(e.x, e.y) ?: return null
+        val pl = strokes?.page(index) ?: return null
+        for (li in pl.layers.indices.reversed()) {
+            val ly = pl.layers[li]
+            if (!ly.isVisible) continue
+            for (k in ly.items.indices.reversed()) {
+                val im = ly.items[k]
+                if (im.linkType != ImageItem.LINK_NONE && im.hit(p[0], p[1])) return im
+            }
+        }
+        return null
+    }
+
+    private fun startLinkHint(e: MotionEvent) {
+        stopLinkHint()
+        if (continuous || e.pointerCount != 1 || !(tool == 0 || tool == 1 || tool == 3)) return
+        val im = linkAt(e) ?: return
+        linkCand = im
+        postDelayed(linkHintRun, 220) // solo si se mantiene presionada: al dibujar encima no parpadea
+    }
+
+    private fun stopLinkHint() {
+        removeCallbacks(linkHintRun)
+        linkCand = null
+        if (linkHint != null) {
+            linkHint = null
+            invalidate()
+        }
+    }
+
+    /** Ícono de cadena en la esquina superior derecha de la imagen con enlace que se mantiene presionada. */
+    private fun drawLinkHint(c: Canvas) {
+        val im = linkHint ?: return
+        val pts = handlePts(im) ?: return // tirador 2 = esquina superior derecha
+        val x = pts[4]
+        val y = pts[5]
+        val acc = ThemeUtils.accentHi(context)
+        ovFill.color = context.getColor(R.color.sf3)
+        c.drawCircle(x, y, 16f * d, ovFill)
+        ovStroke.color = acc
+        c.drawCircle(x, y, 16f * d, ovStroke)
+        val ic = Icons(Icons.LINK, acc, false)
+        ic.setBounds((x - 10f * d).toInt(), (y - 10f * d).toInt(), (x + 10f * d).toInt(), (y + 10f * d).toInt())
+        ic.draw(c)
     }
 
     /** Registra en el historial el borrado que acaba de terminar (una sola vez por gesto). */
@@ -1352,7 +1424,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         col.setPadding(dp(4), dp(4), dp(4), dp(4))
         col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
         val acts = listOf(
-            MenuAct(Icons.LINK, "Enlace", 0f, soonAct("Enlace")),
+            MenuAct(Icons.LINK, "Enlace", 0f) { (selItem as? ImageItem)?.let { onEditLink?.invoke(it) } },
             MenuAct(Icons.CROP, "Recortar", 0f) { enterCrop() },
             MenuAct(Icons.CUT, "Recorte libre", 0f) { enterLasso() },
             MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
@@ -1483,6 +1555,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     override fun dispatchDraw(canvas: Canvas) {
         super.dispatchDraw(canvas)
         drawSelection(canvas)
+        drawLinkHint(canvas)
     }
 
     /** Recuadro, 8 tiradores y círculo de giro del elemento seleccionado (se dibuja encima de la hoja, sin recorte). */
@@ -1673,11 +1746,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 vel?.recycle()
                 vel = VelocityTracker.obtain()
                 vel?.addMovement(e)
+                downTime = e.eventTime
+                startLinkHint(e)
                 if (drawTool) beginStroke(e, stylus) else if (selTool) beginSelect(e, stylus)
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 if (e.pointerCount == 2) {
                     cancelStroke() // un segundo dedo = gesto de vista, no trazo
+                    stopLinkHint()
                     endManip()
                     mode = 2
                     multi = true
@@ -1686,6 +1762,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
             MotionEvent.ACTION_MOVE -> {
                 vel?.addMovement(e)
+                if ((linkCand != null || linkHint != null) && hypot(e.x - sx, e.y - sy) > touchSlop) stopLinkHint()
                 if (mode == 2 && e.pointerCount >= 2) twoFinger(e)
                 else if (mode == 1) {
                     if (penDown) drawMove(e, stylus) else if (manip != 0) selMove(e) else oneFinger(e)
@@ -1703,8 +1780,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             MotionEvent.ACTION_UP -> {
                 vel?.addMovement(e)
                 vel?.computeCurrentVelocity(1000)
-                if (penDown) endStroke(e)
+                // Un toque corto y quieto sobre una imagen con enlace lo abre en vez de dibujar o mover la vista.
+                val tapLink = if (!multi && !continuous && (tool == 0 || tool == 1 || tool == 3) &&
+                    e.eventTime - downTime < 450 && hypot(e.x - sx, e.y - sy) < touchSlop
+                ) linkAt(e) else null
+                if (penDown && tapLink != null) discardStroke() else if (penDown) endStroke(e)
                 endManip()
+                stopLinkHint()
+                if (tapLink != null) onOpenLink?.invoke(tapLink)
                 if (!multi && !toolActive) {
                     if (continuous) {
                         val b = contBounds()
@@ -1729,6 +1812,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             MotionEvent.ACTION_CANCEL -> {
                 if (penDown) cancelStroke()
                 endManip()
+                stopLinkHint()
                 vel?.recycle()
                 vel = null
                 mode = 0

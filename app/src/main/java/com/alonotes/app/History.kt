@@ -14,7 +14,9 @@ internal class ItemSnap(
     val baseW: Float,
     val fh: Boolean,
     val fv: Boolean,
-    val op: Float
+    val op: Float,
+    val lt: Int,
+    val ld: String
 )
 
 /** Estado lógico de una capa. Los trazos son inmutables, así que se guardan las referencias (no se copian los puntos). */

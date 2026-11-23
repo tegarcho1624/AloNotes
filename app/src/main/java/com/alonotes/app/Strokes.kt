@@ -147,7 +147,7 @@ internal class PageLayers(first: List<Stroke>? = null) {
                     l.items.add(
                         ImageItem(
                             dto.id, File(imgDir, dto.file), RectF(dto.l, dto.t, dto.r, dto.b), dto.rot, dto.bw,
-                            dto.fh, dto.fv, dto.op.coerceIn(0f, 1f)
+                            dto.fh, dto.fv, dto.op.coerceIn(0f, 1f), dto.lt, dto.ld
                         )
                     )
                 }
@@ -169,7 +169,7 @@ internal class PageLayers(first: List<Stroke>? = null) {
                 ly.items.map { im ->
                     ItemSnap(
                         im.id, im.file, im.bounds.left, im.bounds.top, im.bounds.right, im.bounds.bottom,
-                        im.rotation, im.baseW, im.isFlippedH, im.isFlippedV, im.opacity
+                        im.rotation, im.baseW, im.isFlippedH, im.isFlippedV, im.opacity, im.linkType, im.linkData
                     )
                 }
             )
@@ -187,7 +187,7 @@ internal class PageLayers(first: List<Stroke>? = null) {
             val ly = Layer(ls.id, ls.name, ls.visible, ls.opacity)
             ly.canvas.addAll(ls.strokes)
             for (isn in ls.items) {
-                val im = ImageItem(isn.id, isn.file, RectF(isn.l, isn.t, isn.r, isn.b), isn.rot, isn.baseW, isn.fh, isn.fv, isn.op)
+                val im = ImageItem(isn.id, isn.file, RectF(isn.l, isn.t, isn.r, isn.b), isn.rot, isn.baseW, isn.fh, isn.fv, isn.op, isn.lt, isn.ld)
                 im.bitmap = cache[isn.id + "|" + isn.file.path]
                 ly.items.add(im)
             }

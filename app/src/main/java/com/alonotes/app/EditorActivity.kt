@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.RectF
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -86,12 +87,14 @@ class EditorActivity : Activity() {
         // Área de hojas
         val area = FrameLayout(this)
         viewport = PageViewport(this)
-        viewport.restore(b?.getBoolean("cont") ?: false, b?.getInt("page") ?: 0)
+        viewport.restore(b?.getBoolean("cont") ?: false, b?.getInt("page") ?: intent.getIntExtra("page", 0))
         viewport.onPage = {
             history.clear() // al cambiar de hoja el historial empieza de cero
             updateCounter()
         }
         viewport.onRecord = { history.record(it) }
+        viewport.onEditLink = { showLinkMenu(it) }
+        viewport.onOpenLink = { openLink(it) }
         history.onChange = { if (::bar.isInitialized) buildBar() } // activa o apaga deshacer/rehacer
         strokes = StrokeStore.load(this, docId)
         LayerRepository.applyTo(this, docId, strokes)
@@ -248,6 +251,177 @@ class EditorActivity : Activity() {
         dv.setMargins(dp(8), 0, dp(8), 0)
         bar.addView(div, dv)
         bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+    }
+
+    // ---------- Enlaces de imagen ----------
+
+    private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+
+    /** Texto de a dónde apunta el enlace de la imagen (para mostrarlo en el menú). */
+    private fun linkLabel(item: ImageItem): String {
+        if (item.linkType == ImageItem.LINK_WEB) return item.linkData
+        val k = item.linkData.lastIndexOf('|')
+        if (k <= 0) return "?"
+        val note = NoteStore.get(this, item.linkData.substring(0, k)) ?: return "nota eliminada"
+        val page = (item.linkData.substring(k + 1).toIntOrNull() ?: 0) + 1
+        return note.name + " · Page " + page
+    }
+
+    /** Menú de enlace: Enlace Web, Enlace Interno y (si ya tiene) Quitar enlace. */
+    private fun showLinkMenu(item: ImageItem) {
+        val ink = getColor(R.color.ink)
+        val l = UiKit.vbox(this, 12)
+        val t = UiKit.text(this, "Enlace de la imagen", 17, ink)
+        t.setPadding(dp(14), dp(8), dp(14), dp(4))
+        l.addView(t)
+        if (item.linkType != ImageItem.LINK_NONE) {
+            val cur = UiKit.text(this, "Actual: " + linkLabel(item), 13, getColor(R.color.mut))
+            cur.setSingleLine(true)
+            cur.ellipsize = android.text.TextUtils.TruncateAt.END
+            cur.setPadding(dp(14), 0, dp(14), dp(8))
+            l.addView(cur)
+        }
+        val ref = DlgRef()
+        l.addView(UiKit.sheetRow(this, Icons.LINK, "Enlace Web", ink, ref) { askWebLink(item) })
+        l.addView(UiKit.sheetRow(this, Icons.NOTES, "Enlace Interno", ink, ref) { pickInternalLink(item) })
+        if (item.linkType != ImageItem.LINK_NONE) {
+            l.addView(UiKit.sheetRow(this, Icons.CLOSE, "Quitar enlace", getColor(R.color.danger), ref) {
+                setLink(item, ImageItem.LINK_NONE, "")
+            })
+        }
+        ref.d = UiKit.show(this, l, true)
+    }
+
+    /** Guarda el enlace en la imagen (un paso del historial) y en las capas. */
+    private fun setLink(item: ImageItem, type: Int, data: String) {
+        if (total == 0) return
+        val pre = strokes.page(viewport.index).snapshot()
+        item.linkType = type
+        item.linkData = data
+        history.record(pre)
+        persistLayers()
+        viewport.refreshPage()
+        toast(if (type == ImageItem.LINK_NONE) "Enlace quitado" else "Enlace guardado")
+    }
+
+    /** Solo http y https (con o sin el prefijo escrito). Devuelve la URL limpia o null si no es válida. */
+    private fun normalizeUrl(raw: String): String? {
+        var s = raw.trim()
+        if (s.isEmpty() || s == "https://") return null
+        if (!s.contains("://")) s = "https://$s"
+        val u = try {
+            Uri.parse(s)
+        } catch (e: Exception) {
+            return null
+        }
+        val sch = u.scheme?.lowercase()
+        if ((sch != "http" && sch != "https") || u.host.isNullOrEmpty()) return null
+        return s
+    }
+
+    private fun askWebLink(item: ImageItem) {
+        val start = if (item.linkType == ImageItem.LINK_WEB) item.linkData else "https://"
+        UiKit.askName(this, "Enlace web", start) { raw ->
+            val url = normalizeUrl(raw)
+            if (url == null) toast("Escribe una dirección http o https válida") else setLink(item, ImageItem.LINK_WEB, url)
+        }
+    }
+
+    /** Selector de destino: primero las hojas de esta nota y luego las otras notas (de una nota con varias hojas se elige la hoja). */
+    private fun pickInternalLink(item: ImageItem) {
+        val here = ArrayList<Pair<String, () -> Unit>>()
+        for (i in 0 until total) {
+            here.add(Pair("Page " + (i + 1), { setLink(item, ImageItem.LINK_INTERNAL, "$docId|$i") }))
+        }
+        val others = ArrayList<Pair<String, () -> Unit>>()
+        for (n in NoteStore.notesForLinks(this)) {
+            if (n.id == docId) continue
+            others.add(Pair(n.name.ifEmpty { "Nota sin título" }, { pickPageOf(item, n) }))
+        }
+        showPicker("Enlace interno", listOf(Pair("Esta nota", here), Pair("Otras notas", others)))
+    }
+
+    private fun pickPageOf(item: ImageItem, n: NoteStore.Item) {
+        val count = n.pages.length()
+        if (count <= 1) {
+            setLink(item, ImageItem.LINK_INTERNAL, n.id + "|0")
+            return
+        }
+        val rows = ArrayList<Pair<String, () -> Unit>>()
+        for (i in 0 until count) rows.add(Pair("Page " + (i + 1), { setLink(item, ImageItem.LINK_INTERNAL, n.id + "|" + i) }))
+        showPicker(n.name, listOf(Pair("Hojas", rows)))
+    }
+
+    /** Lista con scroll de opciones por secciones (título de sección y filas que ejecutan su acción al tocarlas). */
+    private fun showPicker(title: String, sections: List<Pair<String, List<Pair<String, () -> Unit>>>>) {
+        val ink = getColor(R.color.ink)
+        val mut = getColor(R.color.mut)
+        val box = UiKit.vbox(this, 12)
+        val tt = UiKit.text(this, title, 17, ink)
+        tt.setPadding(dp(14), dp(8), dp(14), dp(8))
+        box.addView(tt)
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        val ref = DlgRef()
+        var rows = 0
+        for ((name, items) in sections) {
+            if (items.isEmpty()) continue
+            val h = UiKit.text(this, name, 13, mut)
+            h.setPadding(dp(14), dp(10), dp(14), dp(4))
+            list.addView(h)
+            rows++
+            for ((label, act) in items) {
+                list.addView(UiKit.sheetRow(this, Icons.NOTES, label, ink, ref) { act() })
+                rows++
+            }
+        }
+        if (rows == 0) {
+            toast("No hay destinos")
+            return
+        }
+        val sv = android.widget.ScrollView(this)
+        sv.addView(list)
+        val maxH = (resources.displayMetrics.heightPixels * 0.55f).toInt()
+        box.addView(sv, LinearLayout.LayoutParams(-1, minOf(maxH, rows * dp(52))))
+        ref.d = UiKit.show(this, box, true)
+    }
+
+    /** Abre el enlace de una imagen tocada: web en el navegador; interno, la hoja o la nota de destino. */
+    private fun openLink(item: ImageItem) {
+        when (item.linkType) {
+            ImageItem.LINK_WEB -> {
+                val url = normalizeUrl(item.linkData)
+                if (url == null) {
+                    toast("El enlace web no es válido")
+                    return
+                }
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                } catch (e: Exception) {
+                    toast("No se pudo abrir el enlace")
+                }
+            }
+            ImageItem.LINK_INTERNAL -> openInternal(item.linkData)
+        }
+    }
+
+    private fun openInternal(data: String) {
+        val k = data.lastIndexOf('|')
+        if (k <= 0) return
+        val id = data.substring(0, k)
+        val page = data.substring(k + 1).toIntOrNull() ?: 0
+        if (id == docId) {
+            if (page in 0 until total) viewport.goToPage(page) else toast("Esa hoja ya no existe")
+            return
+        }
+        if (NoteStore.get(this, id) == null) {
+            toast("La nota de destino ya no existe")
+            return
+        }
+        val i = Intent(this, EditorActivity::class.java)
+        i.putExtra("id", id)
+        i.putExtra("page", page)
+        startActivity(i)
     }
 
     // ---------- Deshacer y rehacer ----------
