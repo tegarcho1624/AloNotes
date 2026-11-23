@@ -33,7 +33,9 @@ internal class ImageDto(
     val op: Float = 1f,
     /** Enlace: tipo (0 ninguno, 1 web, 2 interno) y destino. */
     val lt: Int = 0,
-    val ld: String = ""
+    val ld: String = "",
+    /** Bloqueada. */
+    val lk: Boolean = false
 )
 
 /** Archivo de capas de una nota (una entrada por hoja). */
@@ -95,7 +97,7 @@ internal object LayerRepository {
                     pl.layers.map { ly ->
                         ly.items.map { ImageDto(
                             it.id, it.file.name, it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom,
-                            it.rotation, it.baseW, it.isFlippedH, it.isFlippedV, it.opacity, it.linkType, it.linkData
+                            it.rotation, it.baseW, it.isFlippedH, it.isFlippedV, it.opacity, it.linkType, it.linkData, it.isLocked
                         ) }
                     }
                 )

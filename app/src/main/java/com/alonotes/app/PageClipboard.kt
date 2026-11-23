@@ -19,7 +19,8 @@ internal class ClipImage(
     val fv: Boolean,
     val op: Float,
     val lt: Int,
-    val ld: String
+    val ld: String,
+    val lk: Boolean
 )
 
 internal class ClipLayer(
@@ -71,7 +72,7 @@ internal object PageClipboard {
                         continue
                     }
                     val b = im.bounds
-                    imgs.add(ClipImage(dst, b.left, b.top, b.right, b.bottom, im.rotation, im.baseW, im.isFlippedH, im.isFlippedV, im.opacity, im.linkType, im.linkData))
+                    imgs.add(ClipImage(dst, b.left, b.top, b.right, b.bottom, im.rotation, im.baseW, im.isFlippedH, im.isFlippedV, im.opacity, im.linkType, im.linkData, im.isLocked))
                 }
                 val strokes = ly.canvas.map { s -> Stroke(s.type, s.color, s.widthMm, s.pts.copyOf()) }
                 layers.add(ClipLayer(ly.name, ly.isVisible, ly.opacity, strokes, imgs))
@@ -109,7 +110,7 @@ internal object PageClipboard {
                     } catch (e: Exception) {
                         continue
                     }
-                    ly.items.add(ImageItem(id, dst, RectF(im.l, im.t, im.r, im.b), im.rot, im.bw, im.fh, im.fv, im.op, im.lt, im.ld))
+                    ly.items.add(ImageItem(id, dst, RectF(im.l, im.t, im.r, im.b), im.rot, im.bw, im.fh, im.fv, im.op, im.lt, im.ld, im.lk))
                 }
                 ls.add(ly)
             }

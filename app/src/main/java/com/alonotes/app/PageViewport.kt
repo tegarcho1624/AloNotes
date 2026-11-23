@@ -114,6 +114,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     /** Botón flotante de 3 puntos, anclado al lado izquierdo del recuadro de selección. */
     private var more: View? = null
 
+    /** Botón flotante de candado: ocupa el lugar del de 3 puntos cuando la imagen seleccionada está bloqueada. */
+    private var lockBtn: View? = null
+
     private var specs: List<Spec> = emptyList()
     private var single: PageView? = null
     private var column: LinearLayout? = null
@@ -809,20 +812,26 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         }
         val sel = selItem
         if (sel != null) {
-            val pts = handlePts(sel)
-            val h = if (pts != null) hitHandle(pts, e.x, e.y) else -1
-            if (h >= 0) {
-                startManip(sel, if (h == 8) M_ROTATE else M_RESIZE, h, p)
-                return
-            }
-            if (sel.hit(p[0], p[1])) {
-                startManip(sel, M_MOVE, -1, p)
-                return
+            if (sel.isLocked) {
+                // Bloqueada: no hay tiradores ni se mueve. Un toque encima la deja seleccionada (para poder desbloquearla).
+                if (sel.hit(p[0], p[1])) return
+            } else {
+                val pts = handlePts(sel)
+                val h = if (pts != null) hitHandle(pts, e.x, e.y) else -1
+                if (h >= 0) {
+                    startManip(sel, if (h == 8) M_ROTATE else M_RESIZE, h, p)
+                    return
+                }
+                if (sel.hit(p[0], p[1])) {
+                    startManip(sel, M_MOVE, -1, p)
+                    return
+                }
             }
         }
         val hit = hitItem(p[0], p[1])
         selItem = hit
-        if (hit != null) startManip(hit, M_MOVE, -1, p) // se selecciona y ya se puede arrastrar
+        // Se selecciona y ya se puede arrastrar (salvo que esté bloqueada).
+        if (hit != null && !hit.isLocked) startManip(hit, M_MOVE, -1, p)
         updateMore()
         invalidate()
     }
@@ -1329,13 +1338,39 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         return b
     }
 
-    /** Pone el botón sobre la hoja (rebuild() quita todas las vistas del contenedor). */
+    private fun createLock(): View {
+        val b = UiKit.iconBtn(context, Icons.LOCK, ThemeUtils.accentHi(context), 44, 22) { setLocked(false) }
+        UiKit.ripple(context, b, 22, context.getColor(R.color.sf3))
+        b.elevation = 6f * d
+        b.visibility = INVISIBLE
+        return b
+    }
+
+    /** Pone los botones flotantes sobre la hoja (rebuild() quita todas las vistas del contenedor). */
     private fun attachMore() {
         val b = more ?: createMore().also { more = it }
         if (b.parent == null) addView(b, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.START))
+        val k = lockBtn ?: createLock().also { lockBtn = it }
+        if (k.parent == null) addView(k, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.START))
+    }
+
+    /** Bloquea o desbloquea la imagen seleccionada (un paso del historial) y guarda. */
+    private fun setLocked(value: Boolean) {
+        val item = selItem ?: return
+        if (item.isLocked == value) return
+        val pre = snapNow()
+        item.isLocked = value
+        manip = 0
+        mMoved = false
+        onItemsChanged?.invoke()
+        if (pre != null) onRecord?.invoke(pre)
+        updateMore()
+        single?.invalidate()
+        invalidate()
     }
 
     private fun hideMore(b: View) {
+        lockBtn?.let { if (it.visibility != INVISIBLE) it.visibility = INVISIBLE }
         if (b.visibility != INVISIBLE) b.visibility = INVISIBLE
         dismissMenu() // sin selección no hay menú: desaparecen juntos
     }
@@ -1430,7 +1465,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
             MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
             MenuAct(Icons.OPACITY, "Opacidad", 0f) { showOpacity(anchor) },
-            MenuAct(Icons.LOCK, "Bloquear objeto", 0f, soonAct("Bloquear objeto"))
+            MenuAct(Icons.LOCK, "Bloquear objeto", 0f) { setLocked(true) }
         )
         for (a in acts) {
             val btn = UiKit.iconBtn(ctx, a.icon, ink, 44, 22) {
@@ -1541,9 +1576,17 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val gap = half + 14f * d
         val bx = (pts[6] + ux * gap).coerceIn(half, max(half, width - half))
         val by = (pts[7] + uy * gap).coerceIn(half, max(half, height - half))
-        b.x = bx - half
-        b.y = by - half
-        if (b.visibility != VISIBLE) b.visibility = VISIBLE
+        // Bloqueada: el candado ocupa el lugar del botón de 3 puntos (y el menú, si estaba abierto, se cierra).
+        val lb = lockBtn
+        val shown = if (item.isLocked && lb != null) lb else b
+        val other = if (shown === b) lb else b
+        if (other != null && other.visibility != INVISIBLE) {
+            other.visibility = INVISIBLE
+            if (other === b) dismissMenu()
+        }
+        shown.x = bx - half
+        shown.y = by - half
+        if (shown.visibility != VISIBLE) shown.visibility = VISIBLE
     }
 
     override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, bt: Int) {
@@ -1573,7 +1616,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val pts = handlePts(item) ?: return
         val acc = ThemeUtils.accentHi(context)
         val ink = context.getColor(R.color.ink)
-        ovStroke.color = acc
+        val locked = item.isLocked
+        ovStroke.color = if (locked) context.getColor(R.color.mut) else acc
         val path = Path()
         path.moveTo(pts[0], pts[1])
         path.lineTo(pts[4], pts[5])
@@ -1581,6 +1625,15 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         path.lineTo(pts[10], pts[11])
         path.close()
         c.drawPath(path, ovStroke)
+        if (locked) {
+            // Bloqueada: contorno gris y tiradores pequeños y apagados (no se usan); sin círculo de giro.
+            for (i in 0 until 8) {
+                ovFill.color = context.getColor(R.color.ln2)
+                c.drawCircle(pts[i * 2], pts[i * 2 + 1], 4f * d, ovFill)
+                c.drawCircle(pts[i * 2], pts[i * 2 + 1], 4f * d, ovStroke)
+            }
+            return
+        }
         c.drawLine(pts[2], pts[3], pts[16], pts[17], ovStroke)
         for (i in 0 until 8) {
             ovFill.color = ink

@@ -252,6 +252,13 @@ el ícono del launcher (color fijo).
   Una imagen SIN enlace no intercepta nada: el lápiz dibuja encima como siempre. Con la herramienta Seleccionar las imágenes se seleccionan como antes.
 - Al mantener presionada una imagen con enlace aparece un ícono de cadena en su esquina superior derecha.
 
+## Bloquear objeto (v0.18.0)
+- `SelectableItem.isLocked` (`ImageItem.isLocked`), guardado en el JSON de capas (`ImageDto.lk`), en el historial (`ItemSnap.lk`) y al copiar/pegar hojas.
+- Menú de 3 puntos → **Bloquear objeto**: la imagen no se mueve, gira ni redimensiona (los toques de transformación se ignoran). Se ocultan el botón de 3 puntos y el
+  círculo de giro; el recuadro se ve gris con tiradores apagados y, a la izquierda del recuadro, aparece un botón de candado. Tocarlo desbloquea (vuelven el botón de
+  3 puntos, el círculo y la edición). Bloquear/desbloquear es un paso del historial. Una imagen bloqueada sigue pudiéndose seleccionar (para desbloquearla).
+- Todo esto solo se ve con la herramienta Seleccionar; con cualquier otra desaparece, esté o no bloqueada. Los enlaces, la opacidad, el volteo y el recorte no cambian.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

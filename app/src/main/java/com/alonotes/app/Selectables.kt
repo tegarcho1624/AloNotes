@@ -44,6 +44,9 @@ internal interface SelectableItem {
     /** 0 = transparente, 1 = opaco. */
     var opacity: Float
 
+    /** Bloqueado: no se puede mover, girar ni redimensionar hasta desbloquearlo. */
+    var isLocked: Boolean
+
     fun draw(c: Canvas, mmToPx: Float, invalidate: () -> Unit)
 
     /** ¿Está el punto (mm de la hoja) dentro del elemento, ya con su rotación? */
@@ -136,7 +139,8 @@ internal class ImageItem(
     override var opacity: Float = 1f,
     /** Enlace de la imagen: [LINK_NONE], [LINK_WEB] (linkData = URL) o [LINK_INTERNAL] (linkData = "idNota|númeroDeHoja"). */
     var linkType: Int = LINK_NONE,
-    var linkData: String = ""
+    var linkData: String = "",
+    override var isLocked: Boolean = false
 ) : SelectableItem {
     companion object {
         const val LINK_NONE = 0
