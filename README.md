@@ -273,6 +273,15 @@ el ícono del launcher (color fijo).
   muestra los 7 íconos de selección (mismo orden); con cualquier otra herramienta vuelven las flechas y el contador. Las herramientas de la izquierda y los botones de la
   derecha no cambian. Mientras hay un recorte en curso, las acciones de selección avisan y no se aplican.
 
+## Stickers (v0.20.0)
+- `StickerStore.kt`: `Sticker(id, categoryId, path)` y `StickerCategory(id, name)`; JSON en las preferencias `stickers` (`items`, `cats`, `cur`) y archivos en
+  `filesDir/stickers/`. Siempre existe la categoría "Mis stickers" (no se elimina); eliminar otra borra sus stickers.
+- `StickerMenu.kt`: menú flotante (hoja inferior) que abre la **estrella** de la barra superior: **+** (galería, máx. 1024 px), selector de categoría (lista
+  desplegable: elegir, nueva y eliminar) y basura (borra el sticker seleccionado). Cuadrícula de la categoría actual: toque = se inserta al centro de la hoja
+  (40 %) como `ImageItem` normal, con historial; toque largo + arrastrar = reordena (se guarda); toque largo sin mover = lo selecciona y ofrece "Borrar sticker".
+- **Guardar como sticker** (barra de selección): dibuja cada imagen seleccionada como se ve (recorte, giro, espejo; sin opacidad) en un PNG transparente y lo guarda
+  en la categoría actual del menú. No cambia la hoja ni el historial.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

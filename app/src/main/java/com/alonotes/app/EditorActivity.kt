@@ -30,6 +30,7 @@ class EditorActivity : Activity() {
     private companion object {
         const val REQ_IMAGE = 41
         const val REQ_PAGES = 42
+        const val REQ_STICKER = 43
         val DIMS = arrayOf("A5", "A4", "A3", "A2")
         val DIM_LABELS = arrayOf("A5 (148 x 210 mm)", "A4 (210 x 297 mm)", "A3 (297 x 420 mm)", "A2 (420 x 594 mm)")
         val MM = arrayOf(
@@ -51,6 +52,7 @@ class EditorActivity : Activity() {
     private lateinit var counter: TextView
     private lateinit var bar: LinearLayout
     private lateinit var bgLayer: BackgroundLayer
+    private var stickerMenu: StickerMenu? = null
     private var pendingPage = -1 // hoja a mostrar al recargar el editor tras el gestor de páginas
     private var tool = 0 // 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar
     private lateinit var strokes: DocStrokes
@@ -215,6 +217,7 @@ class EditorActivity : Activity() {
             val btn = when (t) {
                 Icons.IMAGE -> tb(t, ink) { editOnly { openGallery() } }
                 Icons.SELECT -> tb(t, ink) { pickTool(4) }
+                Icons.STAR -> tb(t, ink) { editOnly { openStickers() } }
                 else -> tb(t, ink) { editOnly { UiKit.soon(this) } }
             }
             if (t == Icons.SELECT && tool == 4 && !cont) UiKit.ripple(this, btn, 12, ThemeUtils.accentBg(this))
@@ -261,6 +264,137 @@ class EditorActivity : Activity() {
         bar.addView(tb(Icons.GEAR, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
     }
 
+    // ---------- Stickers ----------
+
+    private fun openStickers() {
+        val m = StickerMenu(this, { insertSticker(it) }, { pickStickerImage() })
+        stickerMenu = m
+        m.show()
+    }
+
+    /** "+" del menú: abre la galería para elegir la imagen del nuevo sticker. */
+    private fun pickStickerImage() {
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "image/*"
+        @Suppress("DEPRECATION")
+        startActivityForResult(i, REQ_STICKER)
+    }
+
+    /** Copia reducida de la imagen elegida (máx. 1024 px) a filesDir/stickers/ y la agrega a la categoría actual del menú. */
+    private fun addStickerFromGallery(uri: Uri) {
+        toast("Agregando sticker…")
+        Thread {
+            val dest = File(StickerStore.dir(this), UUID.randomUUID().toString())
+            val f = ImageUtil.saveFromUri(this, uri, dest, 1024, 90, true)
+            if (f != null) StickerStore.add(this, StickerStore.currentCategory(this), f)
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                if (f == null) {
+                    toast("No se pudo abrir la imagen")
+                } else {
+                    stickerMenu?.refresh()
+                    toast("Sticker agregado")
+                }
+            }
+        }.start()
+    }
+
+    /** Inserta el sticker en el centro de la hoja como una imagen normal (se puede seleccionar, girar, recortar...). */
+    private fun insertSticker(s: Sticker) {
+        if (total == 0) {
+            toast("Primero crea una página")
+            return
+        }
+        val pl = strokes.page(viewport.index)
+        if (!pl.layers[pl.selected].isVisible) {
+            toast("La capa está oculta")
+            return
+        }
+        val src = StickerStore.fileOf(this, s)
+        Thread {
+            val id = UUID.randomUUID().toString()
+            val ext = src.extension
+            val dst = File(File(filesDir, "images/$docId"), if (ext.isEmpty()) id else "$id.$ext")
+            val ok = try {
+                dst.parentFile?.mkdirs()
+                src.copyTo(dst, true)
+                true
+            } catch (e: Exception) {
+                false
+            }
+            val bm = if (ok) ImageUtil.decodeFile(dst.path, 2048) else null
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                if (bm == null) toast("No se pudo abrir el sticker") else insertImage(id, dst, bm, 0.4f)
+            }
+        }.start()
+    }
+
+    /**
+     * "Guardar como sticker" (botón de la barra de selección): cada imagen seleccionada se dibuja tal como se ve (su recorte,
+     * su giro y su espejo; sin la opacidad) en un PNG con fondo transparente y se guarda en la categoría actual del menú.
+     */
+    private fun saveAsSticker() {
+        val sel = selectedImages()
+        if (sel.isEmpty()) {
+            toast("Selecciona una imagen primero")
+            return
+        }
+        val dir = StickerStore.dir(this)
+        val cat = StickerStore.currentCategory(this)
+        Thread {
+            var saved = 0
+            for (im in sel) {
+                val bm = im.bitmap ?: continue
+                val out = renderForSticker(im, bm) ?: continue
+                val f = ImageFiles.write(out, dir, UUID.randomUUID().toString()) ?: continue
+                StickerStore.add(this, cat, f)
+                saved++
+            }
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                if (saved == 0) {
+                    toast("No se pudo guardar el sticker")
+                } else {
+                    stickerMenu?.refresh()
+                    toast("Guardado en stickers")
+                }
+            }
+        }.start()
+    }
+
+    /**
+     * Dibuja [im] en un bitmap del tamaño de su caja girada: el rectángulo (con su giro θ) ocupa W·|cosθ| + H·|sinθ| de ancho y
+     * W·|sinθ| + H·|cosθ| de alto. Se usa la misma densidad (píxeles por mm) que la imagen y un máximo de 2048 px.
+     */
+    private fun renderForSticker(im: ImageItem, bm: android.graphics.Bitmap): android.graphics.Bitmap? {
+        val w = im.bounds.width()
+        val h = im.bounds.height()
+        if (w <= 0f || h <= 0f) return null
+        val th = Math.toRadians(im.rotation.toDouble())
+        val cs = Math.abs(Math.cos(th)).toFloat()
+        val sn = Math.abs(Math.sin(th)).toFloat()
+        val bwMm = w * cs + h * sn
+        val bhMm = w * sn + h * cs
+        var k = bm.width / w
+        val big = maxOf(bwMm, bhMm) * k
+        if (big > 2048f) k *= 2048f / big
+        val pw = Math.ceil((bwMm * k).toDouble()).toInt().coerceAtLeast(1)
+        val ph = Math.ceil((bhMm * k).toDouble()).toInt().coerceAtLeast(1)
+        return try {
+            val out = android.graphics.Bitmap.createBitmap(pw, ph, android.graphics.Bitmap.Config.ARGB_8888)
+            val tmp = ImageItem(
+                "tmp", im.file, RectF(bwMm / 2f - w / 2f, bhMm / 2f - h / 2f, bwMm / 2f + w / 2f, bhMm / 2f + h / 2f),
+                im.rotation, w, im.isFlippedH, im.isFlippedV, 1f
+            )
+            tmp.drawBitmap(android.graphics.Canvas(out), k, bm)
+            out
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
     // ---------- Barra de selección: copiar, pegar, orden y eliminar ----------
 
     private fun onSelAction(a: Int) {
@@ -271,7 +405,7 @@ class EditorActivity : Activity() {
         }
         when (a) {
             SelAct.ALL -> if (viewport.selectAll() == 0) toast("No hay objetos en esta capa")
-            SelAct.STICKER -> UiKit.soon(this)
+            SelAct.STICKER -> saveAsSticker()
             SelAct.COPY -> copySelection()
             SelAct.PASTE -> pasteObjects()
             SelAct.FRONT -> reorderSelection(true)
@@ -624,6 +758,11 @@ class EditorActivity : Activity() {
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
         super.onActivityResult(req, res, data)
+        if (req == REQ_STICKER) {
+            val u = data?.data
+            if (res == RESULT_OK && u != null) addStickerFromGallery(u)
+            return
+        }
         if (req == REQ_PAGES) {
             if (res == RESULT_OK && data != null) {
                 onPagesResult(data.getBooleanExtra("changed", false), data.getIntExtra("page", -1))
@@ -650,13 +789,13 @@ class EditorActivity : Activity() {
     }
 
     /** Coloca la imagen en el centro de la hoja actual, dentro de la capa seleccionada, y activa la herramienta Seleccionar. */
-    private fun insertImage(id: String, f: File, bm: android.graphics.Bitmap) {
+    private fun insertImage(id: String, f: File, bm: android.graphics.Bitmap, frac: Float = 0.6f) {
         val sp = viewport.pageSpec()
         if (total == 0 || sp == null) return
         val pl = strokes.page(viewport.index)
         val layer = pl.layers[pl.selected]
-        // Cabe en el 60 % de la hoja, conservando la proporción.
-        val k = minOf(sp.wMm * 0.6f / bm.width, sp.hMm * 0.6f / bm.height)
+        // Cabe en [frac] de la hoja (60 % las fotos, 40 % los stickers), conservando la proporción.
+        val k = minOf(sp.wMm * frac / bm.width, sp.hMm * frac / bm.height)
         val w = bm.width * k
         val h = bm.height * k
         val cx = sp.wMm / 2f
