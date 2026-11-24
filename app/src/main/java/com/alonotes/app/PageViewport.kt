@@ -107,6 +107,20 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private var gRot0 = 0f
     private val gStart = ArrayList<FloatArray>() // por objeto: l, t, r, b, giro al empezar el gesto
 
+    /** ¿Hay algún objeto seleccionado (uno o varios)? */
+    val hasSelection: Boolean get() = selItem != null || multiSel.isNotEmpty()
+
+    /** Avisa al editor cuando se pasa de "nada seleccionado" a "hay selección" o al revés (para mostrar u ocultar los íconos de selección). */
+    var onSelectionChanged: ((Boolean) -> Unit)? = null
+    private var lastHasSel = false
+
+    private fun notifySelection() {
+        val has = hasSelection
+        if (has == lastHasSel) return
+        lastHasSel = has
+        onSelectionChanged?.invoke(has)
+    }
+
     /** ¿Está activo un modo de recorte (rectangular o libre)? Las acciones de selección no deben aplicarse mientras tanto. */
     val inCropMode: Boolean get() = cropMode || lassoMode
 
@@ -1743,6 +1757,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
      * el giro, el tamaño, el zoom y el desplazamiento. Se mantiene dentro del contenedor.
      */
     private fun updateMore() {
+        notifySelection() // updateMore se llama cada vez que cambia la selección
         val b = more ?: return
         val item = selItem
         if (item == null || tool != 4 || continuous || cropMode || lassoMode || b.parent !== this) {

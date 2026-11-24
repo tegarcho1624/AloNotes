@@ -282,6 +282,10 @@ el ícono del launcher (color fijo).
 - **Guardar como sticker** (barra de selección): dibuja cada imagen seleccionada como se ve (recorte, giro, espejo; sin opacidad) en un PNG transparente y lo guarda
   en la categoría actual del menú. No cambia la hoja ni el historial.
 
+## Íconos de selección solo con algo seleccionado (v0.20.1)
+- `PageViewport.onSelectionChanged` avisa al editor cuando se pasa de "nada seleccionado" a "hay selección" (o al revés). Los 7 íconos de selección se muestran en el
+  centro de la barra solo si la herramienta es Seleccionar **y** hay algo seleccionado; en cualquier otro caso se ve la navegación `< 1/1 >`.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

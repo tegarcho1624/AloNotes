@@ -53,6 +53,7 @@ class EditorActivity : Activity() {
     private lateinit var bar: LinearLayout
     private lateinit var bgLayer: BackgroundLayer
     private var stickerMenu: StickerMenu? = null
+    private var hasSel = false // ¿hay algo seleccionado en la hoja? (lo avisa el visor)
     private var pendingPage = -1 // hoja a mostrar al recargar el editor tras el gestor de páginas
     private var tool = 0 // 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar
     private lateinit var strokes: DocStrokes
@@ -95,6 +96,10 @@ class EditorActivity : Activity() {
             updateCounter()
         }
         viewport.onRecord = { history.record(it) }
+        viewport.onSelectionChanged = {
+            hasSel = it
+            if (::bar.isInitialized) buildBar() // los íconos de selección solo se ven si hay algo seleccionado
+        }
         viewport.onEditLink = { showLinkMenu(it) }
         viewport.onOpenLink = { openLink(it) }
         history.onChange = { if (::bar.isInitialized) buildBar() } // activa o apaga deshacer/rehacer
@@ -230,8 +235,8 @@ class EditorActivity : Activity() {
             PenOptions.buildEraser(this, bar) { buildBar() }
         } else if (tool == 3 && !cont) {
             PenOptions.buildHighlighter(this, bar) { buildBar() }
-        } else if (tool == 4 && !cont) {
-            // Herramienta Seleccionar: en vez de las flechas de página, los 7 íconos de selección (en este orden)
+        } else if (tool == 4 && !cont && hasSel) {
+            // Herramienta Seleccionar CON algo seleccionado: en vez de las flechas de página, los 7 íconos de selección (en este orden)
             val defs = listOf(
                 Pair(Icons.SELECT, SelAct.ALL), Pair(Icons.STAR, SelAct.STICKER), Pair(Icons.COPY, SelAct.COPY),
                 Pair(Icons.PASTE, SelAct.PASTE), Pair(Icons.BRING_FRONT, SelAct.FRONT), Pair(Icons.SEND_BACK, SelAct.BACK),
