@@ -59,6 +59,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     var tool = 0
         set(v) {
             if (v != field) {
+                stopEyedropper()
                 cancelStroke()
                 endManip()
                 if (v != 4) {
@@ -560,6 +561,64 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val sc = v.width / v.spec.wMm
         if (sc <= 0f) return null
         return floatArrayOf(pts[0] / sc, pts[1] / sc)
+    }
+
+    // ---------- Gotero (selector de color) ----------
+
+    private var eyeColor: ((Int) -> Unit)? = null
+    private var eyeCancel: (() -> Unit)? = null
+
+    /** Activa el modo gotero: el próximo toque sobre la hoja entrega el color de ese píxel a [onColor]. [onCancel] si se cancela. */
+    fun startEyedropper(onColor: (Int) -> Unit, onCancel: () -> Unit) {
+        stopEyedropper()
+        eyeColor = onColor
+        eyeCancel = onCancel
+    }
+
+    /** Sale del modo gotero sin elegir color (por ejemplo, al cambiar de herramienta u hoja). */
+    fun stopEyedropper() {
+        if (eyeColor == null) return
+        eyeColor = null
+        val c = eyeCancel
+        eyeCancel = null
+        c?.invoke()
+    }
+
+    private fun handleEyedropper(e: MotionEvent): Boolean {
+        if (e.actionMasked == MotionEvent.ACTION_UP) {
+            val col = pixelAt(e.x, e.y)
+            if (col != null) {
+                val cb = eyeColor
+                eyeColor = null
+                eyeCancel = null
+                cb?.invoke(col)
+            }
+        }
+        return true
+    }
+
+    /**
+     * Color del píxel de la hoja bajo (x, y) del visor: se dibuja la hoja (fondo, imágenes y trazos de las capas visibles, sin
+     * recuadros ni menús) en un bitmap de 1 × 1 desplazado a ese punto y se lee con Bitmap.getPixel. Null si el toque cae fuera de la hoja.
+     */
+    private fun pixelAt(x: Float, y: Float): Int? {
+        val v = single ?: return null
+        val p = toPage(x, y) ?: return null
+        if (p[0] < 0f || p[1] < 0f || p[0] > v.spec.wMm || p[1] > v.spec.hMm) return null
+        val k = v.width / v.spec.wMm
+        val px = (p[0] * k).toInt().coerceIn(0, max(0, v.width - 1))
+        val py = (p[1] * k).toInt().coerceIn(0, max(0, v.height - 1))
+        return try {
+            val bm = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+            val c = Canvas(bm)
+            c.translate(-px.toFloat(), -py.toFloat())
+            v.draw(c)
+            val col = bm.getPixel(0, 0)
+            bm.recycle()
+            col or 0xFF000000.toInt()
+        } catch (e: Throwable) {
+            null
+        }
     }
 
     // ---------- Dibujo y borrado ----------
@@ -2098,6 +2157,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (specs.isEmpty()) return false
+        if (eyeColor != null) return handleEyedropper(e) // modo gotero: los toques solo sirven para elegir un color
         val stylus = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
         val toolActive = tool != 0 && !continuous && single != null
         val drawTool = toolActive && tool != 4

@@ -96,6 +96,9 @@ class EditorActivity : Activity() {
             updateCounter()
         }
         viewport.onRecord = { history.record(it) }
+        // Gotero del selector de color: el menú de color le pide al visor el color de un punto de la hoja.
+        PenOptions.eyedropperStart = { onColor, onCancel -> viewport.startEyedropper(onColor, onCancel) }
+        PenOptions.eyedropperStop = { viewport.stopEyedropper() }
         viewport.onSelectionChanged = {
             hasSel = it
             if (::bar.isInitialized) buildBar() // los íconos de selección solo se ven si hay algo seleccionado
@@ -675,6 +678,12 @@ class EditorActivity : Activity() {
     }
 
     // ---------- Deshacer y rehacer ----------
+
+    override fun onDestroy() {
+        PenOptions.eyedropperStart = null // para no retener esta pantalla
+        PenOptions.eyedropperStop = null
+        super.onDestroy()
+    }
 
     private fun undo() = stepHistory(true)
 

@@ -18,11 +18,16 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.Toast
+import androidx.recyclerview.widget.GridLayoutManager
+import androidx.recyclerview.widget.ItemTouchHelper
+import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -67,6 +72,44 @@ internal object ColorPicker {
             onChange(Color.HSVToColor(hsv))
         }
 
+        // Gotero: el menú deja de tomar el foco (los toques fuera de él llegan a la hoja), se toca un punto de la hoja y
+        // el color de ese píxel pasa a HSV: la rueda mueve su puntito, la barra de valor, el HEX y el color del lápiz se actualizan.
+        var pwr: PopupWindow? = null
+        var dropping = false
+
+        fun endDropper() {
+            if (!dropping) return
+            dropping = false
+            pwr?.let {
+                it.isFocusable = true
+                it.update()
+            }
+        }
+
+        fun startDropper() {
+            val start = PenOptions.eyedropperStart
+            if (start == null) {
+                UiKit.soon(a)
+                return
+            }
+            Toast.makeText(a, "Toca un color de la hoja", Toast.LENGTH_SHORT).show()
+            try {
+                (a.getSystemService(Activity.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(hex.windowToken, 0)
+            } catch (ignored: Exception) {
+                // Sin teclado que ocultar.
+            }
+            dropping = true
+            pwr?.let {
+                it.isFocusable = false
+                it.update()
+            }
+            start({ c ->
+                Color.colorToHSV(c, hsv) // RGB -> HSV
+                commit(true)
+                endDropper()
+            }, { endDropper() })
+        }
+
         val root = LinearLayout(a)
         root.setPadding(dp(16), dp(16), dp(16), dp(16))
         root.background = UiKit.rect(a, a.getColor(R.color.sheet), 20, a.getColor(R.color.ln))
@@ -102,59 +145,151 @@ internal object ColorPicker {
             }
         })
         hr.addView(hex, LinearLayout.LayoutParams(0, -2, 1f))
-        hr.addView(UiKit.iconBtn(a, Icons.EYEDROPPER, mut, 40, 24) { UiKit.soon(a) }, UiKit.box(a, 40))
+        hr.addView(UiKit.iconBtn(a, Icons.EYEDROPPER, ThemeUtils.accentHi(a), 40, 24) { startDropper() }, UiKit.box(a, 40))
         val hp = LinearLayout.LayoutParams(wheelSize, -2)
         hp.topMargin = dp(10)
         left.addView(hr, hp)
         root.addView(left)
 
-        // Columna derecha: colores guardados (2 × 7)
-        val tiles = LinearLayout(a)
-        tiles.orientation = LinearLayout.VERTICAL
-        val tp = LinearLayout.LayoutParams(-2, -2)
-        tp.leftMargin = dp(14)
-        root.addView(tiles, tp)
+        // Columna derecha: colores guardados en 14 espacios fijos (2 × 7).
+        //  - Tocar un espacio lo SELECCIONA (borde grueso); si tiene color, ese color pasa al selector.
+        //  - "+" guarda el color actual en el espacio seleccionado (si no hay, en el primero vacío).
+        //  - La basura vacía el espacio seleccionado.
+        //  - Mantener presionado y arrastrar reordena (ItemTouchHelper); se guarda al soltar.
+        val slots = PenStore.slots(a).toMutableList()
+        var selSlot = -1
+        val ink = a.getColor(R.color.ink)
+        val hi = ThemeUtils.accentHi(a)
+        val right = LinearLayout(a)
+        right.orientation = LinearLayout.VERTICAL
+        val rp = LinearLayout.LayoutParams(-2, -2)
+        rp.leftMargin = dp(14)
+        root.addView(right, rp)
 
-        fun buildTiles() {
-            tiles.removeAllViews()
-            val saved = PenStore.saved(a)
-            for (r in 0 until PenStore.MAX_SAVED / 2) {
-                val row = LinearLayout(a)
-                for (k in 0 until 2) {
-                    val i = r * 2 + k
-                    val t = FrameLayout(a)
-                    if (i < saved.size) {
-                        val col = saved[i]
-                        t.background = UiKit.oval(a, col, ln2, 1)
-                        t.setOnClickListener {
-                            Color.colorToHSV(col, hsv)
+        val rv = RecyclerView(a)
+        var dragging = false
+        var moved = false
+        var dragFrom = -1
+        lateinit var touch: ItemTouchHelper
+        val adapter = object : RecyclerView.Adapter<SlotVH>() {
+            override fun getItemCount(): Int = slots.size
+
+            override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int): SlotVH {
+                val f = FrameLayout(a)
+                f.layoutParams = RecyclerView.LayoutParams(dp(56), dp(54))
+                return SlotVH(f)
+            }
+
+            override fun onBindViewHolder(h: SlotVH, position: Int) {
+                val f = h.itemView as FrameLayout
+                f.removeAllViews()
+                val col = slots[position]
+                val sel = position == selSlot
+                val t = View(a)
+                val fill = if (col != 0) col else a.getColor(R.color.sf3)
+                t.background = UiKit.oval(a, fill, if (sel) ink else ln2, if (sel) 3.5f else 1f)
+                f.addView(t, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.CENTER))
+                f.setOnClickListener {
+                    val p = h.bindingAdapterPosition
+                    if (p != RecyclerView.NO_POSITION) {
+                        selSlot = p
+                        if (slots[p] != 0) {
+                            Color.colorToHSV(slots[p], hsv)
                             commit(true)
                         }
-                        t.setOnLongClickListener {
-                            PenStore.setSaved(a, PenStore.saved(a).filterIndexed { j, _ -> j != i })
-                            buildTiles()
-                            true
-                        }
-                    } else {
-                        t.background = UiKit.oval(a, a.getColor(R.color.sf3), ln2, 1)
-                        val iv = ImageView(a)
-                        iv.setImageDrawable(Icons(Icons.PLUS, mut, false))
-                        t.addView(iv, FrameLayout.LayoutParams(dp(22), dp(22), Gravity.CENTER))
-                        t.setOnClickListener {
-                            val c = Color.HSVToColor(hsv)
-                            val l = PenStore.saved(a).toMutableList()
-                            if (!l.contains(c)) l.add(c)
-                            PenStore.setSaved(a, l)
-                            buildTiles()
-                        }
+                        notifyDataSetChanged()
                     }
-                    val lp = LinearLayout.LayoutParams(dp(44), dp(44))
-                    lp.setMargins(dp(6), dp(5), dp(6), dp(5))
-                    row.addView(t, lp)
                 }
-                tiles.addView(row)
+                f.setOnLongClickListener {
+                    val p = h.bindingAdapterPosition
+                    if (p != RecyclerView.NO_POSITION) {
+                        dragging = true
+                        moved = false
+                        dragFrom = p
+                        touch.startDrag(h)
+                    }
+                    true
+                }
             }
         }
+        rv.layoutManager = GridLayoutManager(a, 2)
+        rv.adapter = adapter
+        rv.overScrollMode = View.OVER_SCROLL_NEVER
+        touch = ItemTouchHelper(object : ItemTouchHelper.SimpleCallback(
+            ItemTouchHelper.UP or ItemTouchHelper.DOWN or ItemTouchHelper.LEFT or ItemTouchHelper.RIGHT, 0
+        ) {
+            override fun isLongPressDragEnabled(): Boolean = false
+
+            override fun onMove(r: RecyclerView, vh: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean {
+                val from = vh.bindingAdapterPosition
+                val to = target.bindingAdapterPosition
+                if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
+                slots.add(to, slots.removeAt(from))
+                // La selección sigue al color que ya estaba seleccionado.
+                if (selSlot == from) selSlot = to
+                else if (from < to && selSlot in (from + 1)..to) selSlot--
+                else if (from > to && selSlot in to until from) selSlot++
+                adapter.notifyItemMoved(from, to)
+                moved = true
+                return true
+            }
+
+            override fun onSwiped(vh: RecyclerView.ViewHolder, direction: Int) {}
+
+            override fun onSelectedChanged(vh: RecyclerView.ViewHolder?, state: Int) {
+                super.onSelectedChanged(vh, state)
+                if (state == ItemTouchHelper.ACTION_STATE_DRAG) {
+                    vh?.itemView?.scaleX = 1.12f
+                    vh?.itemView?.scaleY = 1.12f
+                }
+            }
+
+            override fun clearView(r: RecyclerView, vh: RecyclerView.ViewHolder) {
+                super.clearView(r, vh)
+                vh.itemView.scaleX = 1f
+                vh.itemView.scaleY = 1f
+                if (!dragging) return
+                dragging = false
+                if (moved) {
+                    moved = false
+                    PenStore.setSlots(a, slots.toIntArray()) // el nuevo orden se guarda al soltar
+                } else {
+                    selSlot = dragFrom // mantener presionado sin mover = seleccionar
+                }
+                adapter.notifyDataSetChanged()
+            }
+        })
+        touch.attachToRecyclerView(rv)
+
+        fun saveToSlot() {
+            var target = selSlot
+            if (target !in slots.indices) target = slots.indexOfFirst { it == 0 }
+            if (target < 0) {
+                Toast.makeText(a, "No hay espacio libre: toca un color para reemplazarlo", Toast.LENGTH_SHORT).show()
+                return
+            }
+            slots[target] = Color.HSVToColor(hsv) or 0xFF000000.toInt()
+            selSlot = target
+            PenStore.setSlots(a, slots.toIntArray())
+            adapter.notifyDataSetChanged()
+        }
+
+        fun clearSlot() {
+            if (selSlot !in slots.indices || slots[selSlot] == 0) {
+                Toast.makeText(a, "Toca un color guardado para borrarlo", Toast.LENGTH_SHORT).show()
+                return
+            }
+            slots[selSlot] = 0
+            PenStore.setSlots(a, slots.toIntArray())
+            adapter.notifyDataSetChanged()
+        }
+
+        val acts = LinearLayout(a)
+        acts.gravity = Gravity.CENTER
+        acts.addView(UiKit.iconBtn(a, Icons.PLUS, hi, 44, 24) { saveToSlot() }, UiKit.box(a, 44))
+        acts.addView(UiKit.iconBtn(a, Icons.TRASH, ink, 44, 24) { clearSlot() }, UiKit.box(a, 44))
+        right.addView(acts, LinearLayout.LayoutParams(dp(112), dp(46)))
+        right.addView(rv, LinearLayout.LayoutParams(dp(112), dp(54 * (PenStore.MAX_SAVED / 2))))
 
         wheel.hue = hsv[0]; wheel.sat = hsv[1]
         wheel.onPick = { h, s ->
@@ -167,16 +302,21 @@ internal object ColorPicker {
             commit(true)
         }
         render(true)
-        buildTiles()
 
         val pw = PopupWindow(root, -2, -2, true)
+        pwr = pw
         pw.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         pw.elevation = dp(8).toFloat()
         pw.inputMethodMode = PopupWindow.INPUT_METHOD_NEEDED
         pw.softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-        pw.setOnDismissListener { onDismiss() }
+        pw.setOnDismissListener {
+            PenOptions.eyedropperStop?.invoke() // si el gotero estaba esperando, se cancela
+            onDismiss()
+        }
         pw.showAsDropDown(anchor, 0, dp(6), Gravity.END)
     }
+
+    private class SlotVH(v: View) : RecyclerView.ViewHolder(v)
 
     /** Círculo cromático: ángulo = tono (antihorario, rojo a la derecha), radio = saturación. */
     private class WheelView(a: Activity) : View(a) {

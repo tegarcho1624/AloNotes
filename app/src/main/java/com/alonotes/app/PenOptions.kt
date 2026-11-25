@@ -24,6 +24,10 @@ import androidx.core.graphics.ColorUtils
  * El trazo en sí llega en la siguiente fase; aquí solo se configuran las opciones.
  */
 internal object PenOptions {
+    /** El editor los conecta al visor: el gotero del selector de color pide un color de la hoja (y puede cancelarlo). */
+    var eyedropperStart: ((onColor: (Int) -> Unit, onCancel: () -> Unit) -> Unit)? = null
+    var eyedropperStop: (() -> Unit)? = null
+
     fun typeIcon(type: Int): Int = when (type) {
         1 -> Icons.FOUNTAIN
         2 -> Icons.BRUSH

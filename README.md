@@ -296,6 +296,14 @@ el ícono del launcher (color fijo).
 - **Borrador:** ya partía el trazo en trozos independientes (cada trozo es un trazo nuevo, y ahora se puede seleccionar por separado). Se aceleró: cada trazo guarda su caja (se
   calcula una vez) y el borrador descarta de inmediato los que quedan lejos; si nada toca el círculo no se crea nada. Tocar un trazo solo mide los trazos cuya caja está cerca.
 
+## Selector de color: espacios, reordenar y gotero (v0.22.0)
+- Colores guardados en 14 espacios FIJOS (`PenStore.slots`/`setSlots`; los datos anteriores se leen igual). Tocar un espacio lo selecciona (borde grueso; si tiene color, pasa al selector);
+  **+** guarda el color actual en el espacio seleccionado (si no hay, en el primero vacío); la **basura** vacía el espacio seleccionado; mantener presionado y arrastrar reordena
+  (`ItemTouchHelper` en un `RecyclerView` de 2 columnas) y se guarda al soltar.
+- **Gotero:** el ícono junto al HEX activa el modo gotero: el menú deja de tomar el foco, se toca la hoja y el color de ese píxel (la hoja se dibuja en un bitmap de 1×1 y se lee
+  con `getPixel`) pasa a HSV (`Color.colorToHSV`): el puntito de la rueda, la barra de valor, el HEX y el color del lápiz se actualizan. Se cancela al cambiar de herramienta u hoja.
+- El selector ya era un `PopupWindow` (no mueve la hoja) anclado a los colores de la barra; se mantiene así.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

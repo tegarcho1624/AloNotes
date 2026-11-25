@@ -219,6 +219,31 @@ internal object PenStore {
         sp(c).edit().putString("hl_colors", csv(a.toList())).apply()
     }
 
+    /**
+     * Colores guardados en [MAX_SAVED] espacios FIJOS (0 = vacío), para elegir en cuál se guarda cada color.
+     * Se escribe en la misma clave "saved" con "-" en los vacíos; los datos de antes (lista sin huecos) se leen igual.
+     */
+    fun slots(c: Context): IntArray {
+        val out = IntArray(MAX_SAVED)
+        try {
+            val toks = (sp(c).getString("saved", "") ?: "").split(",")
+            for ((i, t) in toks.withIndex()) {
+                if (i >= MAX_SAVED) break
+                val s = t.trim()
+                if (s.isEmpty() || s == "-") continue
+                ThemeUtils.parseHex(s)?.let { out[i] = it or 0xFF000000.toInt() }
+            }
+        } catch (e: Exception) {
+            // Datos dañados: todos los espacios quedan vacíos.
+        }
+        return out
+    }
+
+    fun setSlots(c: Context, slots: IntArray) {
+        val text = slots.take(MAX_SAVED).joinToString(",") { if (it == 0) "-" else String.format("%06X", it and 0x00FFFFFF) }
+        sp(c).edit().putString("saved", text).apply()
+    }
+
     fun saved(c: Context): List<Int> =
         try { parse(sp(c).getString("saved", "")).take(MAX_SAVED) } catch (e: Exception) { emptyList() }
 
