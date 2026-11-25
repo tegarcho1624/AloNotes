@@ -48,6 +48,36 @@ internal class Stroke(val type: Int, val color: Int, val widthMm: Float, val pts
     val n: Int get() = pts.size / 3
     var cache: Path? = null
     var cacheScale = 0f
+
+    /** Identificador de esta sesión (no se guarda): sirve para volver a seleccionar un trazo después de deshacer o rehacer. */
+    val uid: Long = nextUid.incrementAndGet()
+
+    private var bb: FloatArray? = null
+
+    /** Caja de los puntos (minX, minY, maxX, maxY), sin el grosor. Se calcula una sola vez (el trazo es inmutable). */
+    fun bbox(): FloatArray {
+        val c = bb
+        if (c != null) return c
+        var x0 = Float.MAX_VALUE
+        var y0 = Float.MAX_VALUE
+        var x1 = -Float.MAX_VALUE
+        var y1 = -Float.MAX_VALUE
+        for (i in 0 until n) {
+            val x = pts[i * 3]
+            val y = pts[i * 3 + 1]
+            if (x < x0) x0 = x
+            if (x > x1) x1 = x
+            if (y < y0) y0 = y
+            if (y > y1) y1 = y
+        }
+        val r = floatArrayOf(x0, y0, x1, y1)
+        bb = r
+        return r
+    }
+
+    private companion object {
+        val nextUid = java.util.concurrent.atomic.AtomicLong()
+    }
 }
 
 /** Una capa de una hoja: sus trazos (canvas), visibilidad y opacidad. No usar equals/hashCode: se identifica por id. */
@@ -302,24 +332,64 @@ internal object StrokeRender {
 }
 
 internal object StrokeOps {
+    /** ¿Algún punto del trazo cae dentro del círculo? Descarta de inmediato los trazos cuya caja queda lejos. */
+    private fun touches(s: Stroke, x: Float, y: Float, r: Float, r2: Float): Boolean {
+        val bb = s.bbox()
+        if (x < bb[0] - r || x > bb[2] + r || y < bb[1] - r || y > bb[3] + r) return false
+        for (i in 0 until s.n) {
+            val dx = s.pts[i * 3] - x
+            val dy = s.pts[i * 3 + 1] - y
+            if (dx * dx + dy * dy <= r2) return true
+        }
+        return false
+    }
+
+    /**
+     * ¿Se tocó el trazo? Distancia del punto (x, y) a la línea del trazo ≤ mitad del grosor + [tol] mm. Primero se descarta
+     * por la caja (con muchos trazos solo se miden los pocos cercanos).
+     */
+    fun hit(s: Stroke, x: Float, y: Float, tol: Float): Boolean {
+        val r = s.widthMm / 2f + tol
+        val bb = s.bbox()
+        if (x < bb[0] - r || x > bb[2] + r || y < bb[1] - r || y > bb[3] + r) return false
+        val r2 = r * r
+        val p = s.pts
+        for (i in 0 until s.n - 1) {
+            val ax = p[i * 3]
+            val ay = p[i * 3 + 1]
+            val bx = p[i * 3 + 3]
+            val by = p[i * 3 + 4]
+            val vx = bx - ax
+            val vy = by - ay
+            val len2 = vx * vx + vy * vy
+            var t = if (len2 > 1e-9f) ((x - ax) * vx + (y - ay) * vy) / len2 else 0f
+            t = t.coerceIn(0f, 1f)
+            val dx = ax + t * vx - x
+            val dy = ay + t * vy - y
+            if (dx * dx + dy * dy <= r2) return true
+        }
+        return false
+    }
+
     /**
      * Borra con un círculo de radio [r] mm centrado en (x, y): quita los puntos que caen dentro y
      * parte el trazo en trozos. Devuelve true si cambió algo. Los puntos van a ≤ 0,6 mm entre sí.
      */
     fun eraseAt(list: MutableList<Stroke>, x: Float, y: Float, r: Float): Boolean {
         val r2 = r * r
+        // Rendimiento: primero se ve si ALGÚN trazo toca el círculo (con un descarte rápido por su caja) sin crear nada.
+        var any = false
+        for (s in list) {
+            if (touches(s, x, y, r, r2)) {
+                any = true
+                break
+            }
+        }
+        if (!any) return false
         var changed = false
         val out = ArrayList<Stroke>(list.size + 2)
         for (s in list) {
-            var hit = false
-            for (i in 0 until s.n) {
-                val dx = s.pts[i * 3] - x
-                val dy = s.pts[i * 3 + 1] - y
-                if (dx * dx + dy * dy <= r2) {
-                    hit = true
-                    break
-                }
-            }
+            val hit = touches(s, x, y, r, r2)
             if (!hit) {
                 out.add(s)
                 continue
@@ -453,6 +523,9 @@ internal object StrokeStore {
 /** Una hoja: dibuja su fondo, sus trazos guardados, el trazo en curso y el cursor del borrador. */
 internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val page: () -> PageLayers?) : View(ctx) {
     var live: Stroke? = null
+
+    /** Trazo seleccionado que se está transformando: se dibuja él (movido, girado...) en lugar del original. */
+    var lifted: StrokeItem? = null
     private var cx = 0f
     private var cy = 0f
     private var cr = -1f
@@ -500,7 +573,11 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
                     for (im in ly.items) im.draw(c, scale) { postInvalidate() }
                     c.restoreToCount(n)
                 }
-                for (s in ly.canvas) StrokeRender.draw(c, s, scale, pen)
+                val lf = lifted
+                for (s in ly.canvas) {
+                    if (lf != null && s === lf.src) StrokeRender.draw(c, lf.transformed(), scale, pen)
+                    else StrokeRender.draw(c, s, scale, pen)
+                }
                 // El trazo en curso pertenece a la capa seleccionada.
                 if (i == pl.selected) live?.let { StrokeRender.draw(c, it, scale, pen) }
                 if (sc >= 0) c.restoreToCount(sc)

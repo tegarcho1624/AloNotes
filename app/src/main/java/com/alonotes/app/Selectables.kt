@@ -227,3 +227,134 @@ internal object SelAct {
     const val BACK = 5
     const val DELETE = 6
 }
+
+/**
+ * Un trazo (lápiz, pluma, pincel o marcador) como objeto seleccionable. La caja es el rectángulo de los puntos más la mitad
+ * del grosor (para que el recuadro no corte la línea); se mueve, redimensiona y gira con los mismos gestos que una imagen.
+ * Mientras dura el gesto el trazo se calcula con [transformed] (una matriz sobre los puntos: de la caja del inicio a la caja
+ * actual); al terminar, [bake] deja esos puntos como un Stroke nuevo (el trazo no se guarda con transformación aparte, así el
+ * archivo de trazos y todo lo demás siguen igual). El orden de dibujo no cambia: el nuevo trazo ocupa el lugar del anterior.
+ */
+internal class StrokeItem(var src: Stroke) : SelectableItem {
+    override val id: String get() = "s" + src.uid
+    override val bounds = RectF()
+    override var rotation: Float = 0f
+    override val scale: Float get() = 1f
+    override var isFlippedH: Boolean = false
+    override var isFlippedV: Boolean = false
+    override var opacity: Float = 1f
+    override var isLocked: Boolean = false
+
+    // Estado al empezar el gesto (la transformación va de b0/rot0 a bounds/rotation).
+    private val b0 = RectF()
+    private var rot0 = 0f
+    private var cur: Stroke? = null
+    private val curKey = FloatArray(5)
+
+    init {
+        val bb = src.bbox()
+        val pad = src.widthMm * 0.75f
+        bounds.set(bb[0] - pad, bb[1] - pad, bb[2] + pad, bb[3] + pad)
+        b0.set(bounds)
+    }
+
+    fun beginGesture() {
+        b0.set(bounds)
+        rot0 = rotation
+        cur = null
+    }
+
+    override fun draw(c: Canvas, mmToPx: Float, invalidate: () -> Unit) {
+        StrokeRender.draw(c, transformed(), mmToPx, Paint(Paint.ANTI_ALIAS_FLAG))
+    }
+
+    /**
+     * El trazo con la transformación actual. Para cada punto: se lleva al sistema de la caja inicial (deshaciendo su giro),
+     * se escala (ancho nuevo / ancho inicial, alto nuevo / alto inicial) y se coloca en la caja actual con su giro.
+     * El grosor se escala con la media geométrica de los dos factores.
+     */
+    fun transformed(): Stroke {
+        val same = bounds.left == b0.left && bounds.top == b0.top && bounds.right == b0.right &&
+            bounds.bottom == b0.bottom && rotation == rot0
+        if (same) return src
+        val c = cur
+        if (c != null && curKey[0] == bounds.left && curKey[1] == bounds.top && curKey[2] == bounds.right &&
+            curKey[3] == bounds.bottom && curKey[4] == rotation
+        ) return c
+        val w0 = max(b0.width(), 1e-3f)
+        val h0 = max(b0.height(), 1e-3f)
+        val sx = bounds.width() / w0
+        val sy = bounds.height() / h0
+        val c0x = b0.centerX()
+        val c0y = b0.centerY()
+        val c1x = bounds.centerX()
+        val c1y = bounds.centerY()
+        val a0 = Math.toRadians(rot0.toDouble())
+        val cos0 = cos(a0).toFloat()
+        val sin0 = sin(a0).toFloat()
+        val a1 = Math.toRadians(rotation.toDouble())
+        val cos1 = cos(a1).toFloat()
+        val sin1 = sin(a1).toFloat()
+        val p = src.pts
+        val out = FloatArray(p.size)
+        var i = 0
+        while (i < p.size) {
+            val dx = p[i] - c0x
+            val dy = p[i + 1] - c0y
+            val lx = (dx * cos0 + dy * sin0) * sx // rotar -rot0 y escalar
+            val ly = (-dx * sin0 + dy * cos0) * sy
+            out[i] = c1x + lx * cos1 - ly * sin1 // rotar +rotation y colocar
+            out[i + 1] = c1y + lx * sin1 + ly * cos1
+            out[i + 2] = p[i + 2]
+            i += 3
+        }
+        val f = kotlin.math.sqrt(kotlin.math.abs(sx * sy)).coerceIn(0.05f, 20f)
+        val res = Stroke(src.type, src.color, src.widthMm * f, out)
+        cur = res
+        curKey[0] = bounds.left
+        curKey[1] = bounds.top
+        curKey[2] = bounds.right
+        curKey[3] = bounds.bottom
+        curKey[4] = rotation
+        return res
+    }
+
+    /** Termina el gesto: devuelve el trazo transformado (para ponerlo en la capa) y vuelve a ajustar la caja a él, conservando el giro. */
+    fun bake(): Stroke {
+        val out = transformed()
+        val cx = bounds.centerX()
+        val cy = bounds.centerY()
+        val a = Math.toRadians(rotation.toDouble())
+        val cs = cos(a).toFloat()
+        val sn = sin(a).toFloat()
+        var x0 = Float.MAX_VALUE
+        var y0 = Float.MAX_VALUE
+        var x1 = -Float.MAX_VALUE
+        var y1 = -Float.MAX_VALUE
+        var i = 0
+        while (i < out.pts.size) {
+            val dx = out.pts[i] - cx
+            val dy = out.pts[i + 1] - cy
+            val lx = dx * cs + dy * sn
+            val ly = -dx * sn + dy * cs
+            if (lx < x0) x0 = lx
+            if (lx > x1) x1 = lx
+            if (ly < y0) y0 = ly
+            if (ly > y1) y1 = ly
+            i += 3
+        }
+        val pad = out.widthMm * 0.75f
+        val lcx = (x0 + x1) / 2f
+        val lcy = (y0 + y1) / 2f
+        val w = x1 - x0 + 2f * pad
+        val h = y1 - y0 + 2f * pad
+        val ncx = cx + lcx * cs - lcy * sn
+        val ncy = cy + lcx * sn + lcy * cs
+        bounds.set(ncx - w / 2f, ncy - h / 2f, ncx + w / 2f, ncy + h / 2f)
+        src = out
+        cur = null
+        b0.set(bounds)
+        rot0 = rotation
+        return out
+    }
+}

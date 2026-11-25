@@ -107,8 +107,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private var gRot0 = 0f
     private val gStart = ArrayList<FloatArray>() // por objeto: l, t, r, b, giro al empezar el gesto
 
-    /** ¿Hay algún objeto seleccionado (uno o varios)? */
-    val hasSelection: Boolean get() = selItem != null || multiSel.isNotEmpty()
+    /** ¿Hay imágenes seleccionadas? (un trazo seleccionado NO cuenta: solo muestra su recuadro y el botón de 3 puntos). */
+    val hasSelection: Boolean get() = selItem is ImageItem || multiSel.isNotEmpty() // la barra de 7 íconos es solo de imágenes
 
     /** Avisa al editor cuando se pasa de "nada seleccionado" a "hay selección" o al revés (para mostrar u ocultar los íconos de selección). */
     var onSelectionChanged: ((Boolean) -> Unit)? = null
@@ -341,7 +341,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val found = ArrayList<SelectableItem>()
         val pl = strokes?.page(index)
         if (tool == 4 && pl != null && ids.isNotEmpty()) {
-            for (ly in pl.layers) for (im in ly.items) if (ids.contains(im.id)) found.add(im)
+            for (ly in pl.layers) {
+                for (im in ly.items) if (ids.contains(im.id)) found.add(im)
+                for (st in ly.canvas) if (ids.contains("s" + st.uid)) found.add(StrokeItem(st))
+            }
         }
         setSelection(found)
     }
@@ -822,6 +825,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun itemExists(item: SelectableItem): Boolean {
         val pl = strokes?.page(index) ?: return false
+        if (item is StrokeItem) {
+            for (ly in pl.layers) if (ly.canvas.any { it === item.src }) return true
+            return false
+        }
         for (ly in pl.layers) for (it in ly.items) if (it === item) return true
         return false
     }
@@ -883,12 +890,19 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         return best
     }
 
-    /** Elemento más arriba bajo el punto (capas visibles, de la de arriba a la de abajo). */
+    /**
+     * Objeto más arriba bajo el punto (capas visibles, de la de arriba a la de abajo). En cada capa primero los trazos (de
+     * el más reciente al más viejo) y luego las imágenes, que se dibujan debajo de los trazos de su capa.
+     */
     private fun hitItem(xMm: Float, yMm: Float): SelectableItem? {
         val pl = strokes?.page(index) ?: return null
         for (li in pl.layers.indices.reversed()) {
             val ly = pl.layers[li]
             if (!ly.isVisible) continue
+            for (k in ly.canvas.indices.reversed()) {
+                val st = ly.canvas[k]
+                if (StrokeOps.hit(st, xMm, yMm, 2.5f)) return StrokeItem(st)
+            }
             for (k in ly.items.indices.reversed()) if (ly.items[k].hit(xMm, yMm)) return ly.items[k]
         }
         return null
@@ -949,6 +963,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun startManip(item: SelectableItem, kind: Int, handle: Int, p: FloatArray) {
         manipPre = snapNow()
+        (item as? StrokeItem)?.beginGesture()
         manip = kind
         mHandle = handle
         mP0x = p[0]
@@ -998,6 +1013,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 cropImg?.let { clampImageOverWindow(it) }
             }
         }
+        // Los trazos se guardan con coordenadas de 0 a 655 mm: no se dejan salir de la hoja.
+        (item as? StrokeItem)?.let { keepStrokeInPage(it) }
         single?.invalidate()
         updateMore() // el botón de 3 puntos sigue al recuadro
         invalidate()
@@ -1012,14 +1029,61 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             mMoved = false
             // En los modos de recorte no se guarda nada hasta confirmar.
             if (!cropMode && !lassoMode) {
-                if (kind == M_MOVE || kind == M_RESIZE || kind == M_ROTATE || kind == M_GMOVE || kind == M_GRESIZE || kind == M_GROT) {
+                val one = kind == M_MOVE || kind == M_RESIZE || kind == M_ROTATE
+                val grp = kind == M_GMOVE || kind == M_GRESIZE || kind == M_GROT
+                if (one || grp) {
                     val pre = manipPre
                     if (pre != null) onRecord?.invoke(pre)
                 }
                 manipPre = null
-                onItemsChanged?.invoke()
+                val st = selItem as? StrokeItem
+                if (st != null && one) {
+                    commitStroke(st) // los puntos quedan transformados y se guardan con el archivo de trazos
+                    onChanged?.invoke(index)
+                } else {
+                    onItemsChanged?.invoke()
+                }
             }
         }
+    }
+
+    /** Pone el trazo ya transformado en el mismo lugar de su capa (así no cambia el orden de dibujo). */
+    private fun commitStroke(st: StrokeItem) {
+        val pl = strokes?.page(index) ?: return
+        for (ly in pl.layers) {
+            val i = ly.canvas.indexOfFirst { it === st.src }
+            if (i >= 0) {
+                ly.canvas[i] = st.bake()
+                break
+            }
+        }
+        single?.invalidate()
+        invalidate()
+    }
+
+    /** Mantiene la caja del trazo dentro de la hoja (mueve todo el trazo lo justo). */
+    private fun keepStrokeInPage(st: StrokeItem) {
+        val sp = single?.spec ?: return
+        val b = st.bounds
+        var x0 = Float.MAX_VALUE
+        var y0 = Float.MAX_VALUE
+        var x1 = -Float.MAX_VALUE
+        var y1 = -Float.MAX_VALUE
+        for (k in 0 until 4) {
+            val q = Xf.toPage(
+                b.centerX(), b.centerY(), st.rotation,
+                (if (k % 2 == 0) -1 else 1) * b.width() / 2f, (if (k < 2) -1 else 1) * b.height() / 2f
+            )
+            if (q[0] < x0) x0 = q[0]
+            if (q[0] > x1) x1 = q[0]
+            if (q[1] < y0) y0 = q[1]
+            if (q[1] > y1) y1 = q[1]
+        }
+        var dx = 0f
+        var dy = 0f
+        if (x0 < 0f || x1 - x0 > sp.wMm) dx = -x0 else if (x1 > sp.wMm) dx = sp.wMm - x1
+        if (y0 < 0f || y1 - y0 > sp.hMm) dy = -y0 else if (y1 > sp.hMm) dy = sp.hMm - y1
+        if (dx != 0f || dy != 0f) b.offset(dx, dy)
     }
 
     // ---------- Selección múltiple: mover, redimensionar y girar el grupo ----------
@@ -1665,6 +1729,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(4), dp(4), dp(4), dp(4))
         col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
+        val isImg = selItem is ImageItem // con un trazo seleccionado todas las opciones dicen "Próximamente"
         val acts = listOf(
             MenuAct(Icons.LINK, "Enlace", 0f) { (selItem as? ImageItem)?.let { onEditLink?.invoke(it) } },
             MenuAct(Icons.CROP, "Recortar", 0f) { enterCrop() },
@@ -1677,7 +1742,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         for (a in acts) {
             val btn = UiKit.iconBtn(ctx, a.icon, ink, 44, 22) {
                 dismissMenu()
-                a.run()
+                if (isImg) a.run() else Toast.makeText(ctx, a.name + ": Próximamente", Toast.LENGTH_SHORT).show()
             }
             btn.rotation = a.rot
             col.addView(btn, LinearLayout.LayoutParams(dp(44), dp(44)))
@@ -1758,6 +1823,13 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
      */
     private fun updateMore() {
         notifySelection() // updateMore se llama cada vez que cambia la selección
+        // Un trazo seleccionado se dibuja transformado en su lugar de la capa (el original no se dibuja mientras tanto).
+        val wantLift = selItem as? StrokeItem
+        val pv = single
+        if (pv != null && pv.lifted !== wantLift) {
+            pv.lifted = wantLift
+            pv.invalidate()
+        }
         val b = more ?: return
         val item = selItem
         if (item == null || tool != 4 || continuous || cropMode || lassoMode || b.parent !== this) {

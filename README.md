@@ -286,6 +286,16 @@ el ícono del launcher (color fijo).
 - `PageViewport.onSelectionChanged` avisa al editor cuando se pasa de "nada seleccionado" a "hay selección" (o al revés). Los 7 íconos de selección se muestran en el
   centro de la barra solo si la herramienta es Seleccionar **y** hay algo seleccionado; en cualquier otro caso se ve la navegación `< 1/1 >`.
 
+## Trazos seleccionables (v0.21.0)
+- Con **Seleccionar**, tocar un trazo (lápiz, pluma, pincel o marcador) lo selecciona: recuadro con 8 tiradores y círculo de giro, y el botón de 3 puntos (todas sus
+  opciones dicen "Próximamente" para trazos). La barra de 7 íconos sigue siendo solo para imágenes. `StrokeItem` (`Selectables.kt`) implementa `SelectableItem`:
+  caja = caja de los puntos + 0,75 × grosor; mover/redimensionar/girar con los mismos gestos de las imágenes.
+- Durante el gesto el trazo se muestra transformado (matriz sobre sus puntos, desde la caja inicial a la actual). Al terminar se "hornea": el trazo queda en el mismo lugar de
+  su capa con los puntos nuevos y se guarda con el archivo de trazos de siempre (por eso `LayerRepository` no cambia). No puede salirse de la hoja (las coordenadas se guardan de 0 a 655 mm).
+- Mover/redimensionar/girar un trazo es un paso del historial (se restaura por referencia, sin copiar puntos). Seleccionar solo no es un paso, igual que con imágenes.
+- **Borrador:** ya partía el trazo en trozos independientes (cada trozo es un trazo nuevo, y ahora se puede seleccionar por separado). Se aceleró: cada trazo guarda su caja (se
+  calcula una vez) y el borrador descarta de inmediato los que quedan lejos; si nada toca el círculo no se crea nada. Tocar un trazo solo mide los trazos cuya caja está cerca.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.
