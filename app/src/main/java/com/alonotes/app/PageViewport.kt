@@ -29,6 +29,7 @@ import kotlin.math.atan2
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
+import java.util.IdentityHashMap
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -107,9 +108,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private val gB0 = RectF()
     private var gRot0 = 0f
     private val gStart = ArrayList<FloatArray>() // por objeto: l, t, r, b, giro al empezar el gesto
+    private val gMat = Matrix() // transformación del grupo (mm de la hoja): la usan los trazos del grupo mientras dura el gesto
+    private var gHasStrokes = false
 
-    /** ¿Hay imágenes seleccionadas? (un trazo seleccionado NO cuenta: solo muestra su recuadro y el botón de 3 puntos). */
-    val hasSelection: Boolean get() = selItem is ImageItem || multiSel.isNotEmpty() // la barra de 7 íconos es solo de imágenes
+    /** ¿Hay algo seleccionado (imagen o trazo, uno o varios)? Con algo seleccionado la barra muestra los 7 íconos de selección. */
+    val hasSelection: Boolean get() = selItem != null || multiSel.isNotEmpty()
 
     /** Avisa al editor cuando se pasa de "nada seleccionado" a "hay selección" o al revés (para mostrar u ocultar los íconos de selección). */
     var onSelectionChanged: ((Boolean) -> Unit)? = null
@@ -289,7 +292,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             manip = 0
         }
         if (multiSel.isNotEmpty()) {
-            multiSel.retainAll { itemExists(it) }
+            val alive = aliveKeys() // una sola pasada por la hoja (con muchos trazos, buscar uno por uno sería lento)
+            multiSel.retainAll { alive.contains(if (it is StrokeItem) it.src else it) }
             if (multiSel.size == 1) {
                 selItem = multiSel[0]
                 multiSel.clear()
@@ -312,6 +316,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     /** Selecciona [items] (de la hoja actual): ninguno, uno (selección normal) o varios (recuadro de grupo). */
     fun setSelection(items: List<SelectableItem>) {
         cancelCrop()
+        clearGroupLift()
         manip = 0
         multiSel.clear()
         selItem = null
@@ -326,12 +331,26 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         invalidate()
     }
 
-    /** Selecciona todos los objetos (sin bloquear) de la capa actual. Devuelve cuántos son. */
+    /** Selecciona todos los objetos (imágenes y trazos, sin bloquear) de la capa actual. Devuelve cuántos son. */
     fun selectAll(): Int {
         val pl = strokes?.page(index) ?: return 0
-        val items = pl.layers[pl.selected].items.filter { !it.isLocked }
+        val ly = pl.layers[pl.selected]
+        val items = ArrayList<SelectableItem>()
+        for (im in ly.items) if (!im.isLocked) items.add(im)
+        for (st in ly.canvas) if (!st.locked) items.add(StrokeItem(st))
         setSelection(items)
         return items.size
+    }
+
+    /** Los trazos e imágenes que existen ahora en la hoja actual (por identidad). */
+    private fun aliveKeys(): HashSet<Any> {
+        val out = HashSet<Any>()
+        val pl = strokes?.page(index) ?: return out
+        for (ly in pl.layers) {
+            out.addAll(ly.canvas)
+            out.addAll(ly.items)
+        }
+        return out
     }
 
     /** Ids de lo seleccionado (para volver a seleccionarlo después de deshacer o rehacer). */
@@ -342,9 +361,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val found = ArrayList<SelectableItem>()
         val pl = strokes?.page(index)
         if (tool == 4 && pl != null && ids.isNotEmpty()) {
+            val idSet = HashSet<String>(ids)
             for (ly in pl.layers) {
-                for (im in ly.items) if (ids.contains(im.id)) found.add(im)
-                for (st in ly.canvas) if (ids.contains("s" + st.uid)) found.add(StrokeItem(st))
+                for (im in ly.items) if (idSet.contains(im.id)) found.add(im)
+                for (st in ly.canvas) if (idSet.contains("s" + st.uid)) found.add(StrokeItem(st))
             }
         }
         setSelection(found)
@@ -376,6 +396,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     /** Sale de los modos de recorte y suelta cualquier gesto, sin cambios (antes de deshacer o rehacer). */
     fun cancelModes() {
         cancelCrop()
+        clearGroupLift()
         manip = 0
         mMoved = false
         manipPre = null
@@ -387,6 +408,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     /** Selecciona un elemento de la hoja actual (null = quitar la selección). */
     fun selectItem(item: SelectableItem?) {
         cancelCrop()
+        clearGroupLift()
         multiSel.clear()
         selItem = item
         manip = 0
@@ -1099,10 +1121,39 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 if (st != null && one) {
                     commitStroke(st) // los puntos quedan transformados y se guardan con el archivo de trazos
                     onChanged?.invoke(index)
+                } else if (grp && bakeGroupStrokes()) {
+                    onChanged?.invoke(index) // trazos e imágenes del grupo: se guardan los trazos y las capas
                 } else {
                     onItemsChanged?.invoke()
                 }
             }
+        }
+        if (kind == M_GMOVE || kind == M_GRESIZE || kind == M_GROT) clearGroupLift()
+    }
+
+    /** Cambia el trazo [st] por [out] en el mismo lugar de su capa y hace de [out] el trazo del elemento. */
+    private fun replaceStroke(st: StrokeItem, out: Stroke) {
+        val pl = strokes?.page(index) ?: return
+        for (ly in pl.layers) {
+            val i = ly.canvas.indexOfFirst { it === st.src }
+            if (i >= 0) {
+                ly.canvas[i] = out
+                break
+            }
+        }
+        st.adopt(out)
+    }
+
+    /**
+     * Guarda el cambio de un elemento (opacidad o bloqueo): un trazo se fija en su capa y se guarda con el archivo de trazos;
+     * una imagen solo cambia los datos de las capas.
+     */
+    private fun itemChanged(item: SelectableItem) {
+        if (item is StrokeItem) {
+            commitStroke(item)
+            onChanged?.invoke(index)
+        } else {
+            onItemsChanged?.invoke()
         }
     }
 
@@ -1159,7 +1210,101 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         for (im in multiSel) gStart.add(floatArrayOf(im.bounds.left, im.bounds.top, im.bounds.right, im.bounds.bottom, im.rotation))
         mAng0 = Xf.angleDeg(p[0] - gB0.centerX(), p[1] - gB0.centerY())
         mMoved = false
+        // Los trazos del grupo no recalculan sus puntos en cada movimiento: la hoja los dibuja con una sola matriz (gMat);
+        // al soltar se fijan (bakeGroupStrokes). Las imágenes siguen como antes.
+        val set = HashSet<Stroke>()
+        for (im in multiSel) if (im is StrokeItem) set.add(im.src)
+        gHasStrokes = set.isNotEmpty()
+        gMat.reset()
+        if (gHasStrokes) {
+            single?.liftedSet = set
+            single?.liftMatrix = gMat
+        }
         invalidate()
+    }
+
+    /** Deja de dibujar los trazos del grupo con la matriz del gesto. */
+    private fun clearGroupLift() {
+        val v = single ?: return
+        if (v.liftedSet == null && v.liftMatrix == null) return
+        v.liftedSet = null
+        v.liftMatrix = null
+        v.invalidate()
+    }
+
+    /**
+     * Fija los trazos del grupo: aplica la matriz del gesto a sus puntos (y el grosor, por el factor de escala) y pone cada trazo
+     * nuevo en el mismo lugar de su capa (no cambia el orden de dibujo). Conservan su identificador, así que deshacer y rehacer
+     * vuelven a seleccionarlos. Devuelve true si hubo trazos.
+     */
+    private fun bakeGroupStrokes(): Boolean {
+        if (!gHasStrokes) return false
+        val pl = strokes?.page(index) ?: return false
+        val v = FloatArray(9)
+        gMat.getValues(v)
+        val a = v[Matrix.MSCALE_X]
+        val b = v[Matrix.MSKEW_X]
+        val tx = v[Matrix.MTRANS_X]
+        val c = v[Matrix.MSKEW_Y]
+        val dd = v[Matrix.MSCALE_Y]
+        val ty = v[Matrix.MTRANS_Y]
+        val k = hypot(a, c).coerceIn(0.05f, 20f)
+        val repl = IdentityHashMap<Stroke, Stroke>()
+        for (i in multiSel.indices) {
+            val item = multiSel[i]
+            if (item !is StrokeItem) continue
+            val s0 = item.src
+            val p = s0.pts
+            val out = FloatArray(p.size)
+            var j = 0
+            while (j < p.size) {
+                val x = p[j]
+                val y = p[j + 1]
+                out[j] = a * x + b * y + tx
+                out[j + 1] = c * x + dd * y + ty
+                out[j + 2] = p[j + 2]
+                j += 3
+            }
+            val ns = Stroke(s0.type, s0.color, s0.widthMm * k, out, s0.opacity, s0.locked, s0.uid)
+            repl[s0] = ns
+            multiSel[i] = StrokeItem(ns)
+        }
+        for (ly in pl.layers) {
+            for (i in ly.canvas.indices) {
+                val r = repl[ly.canvas[i]]
+                if (r != null) ly.canvas[i] = r
+            }
+        }
+        return repl.isNotEmpty()
+    }
+
+    /** Si el grupo lleva trazos, no se deja salir de la hoja (los trazos se guardan con coordenadas de 0 a 655 mm). */
+    private fun keepGroupInPage() {
+        val sp = single?.spec ?: return
+        val b = grpB
+        var x0 = Float.MAX_VALUE
+        var y0 = Float.MAX_VALUE
+        var x1 = -Float.MAX_VALUE
+        var y1 = -Float.MAX_VALUE
+        for (k in 0 until 4) {
+            val q = Xf.toPage(
+                b.centerX(), b.centerY(), grpRot,
+                (if (k % 2 == 0) -1 else 1) * b.width() / 2f, (if (k < 2) -1 else 1) * b.height() / 2f
+            )
+            if (q[0] < x0) x0 = q[0]
+            if (q[0] > x1) x1 = q[0]
+            if (q[1] < y0) y0 = q[1]
+            if (q[1] > y1) y1 = q[1]
+        }
+        var dx = 0f
+        var dy = 0f
+        if (x0 < 0f || x1 - x0 > sp.wMm) dx = -x0 else if (x1 > sp.wMm) dx = sp.wMm - x1
+        if (y0 < 0f || y1 - y0 > sp.hMm) dy = -y0 else if (y1 > sp.hMm) dy = sp.hMm - y1
+        if (dx != 0f || dy != 0f) {
+            grpB.offset(dx, dy)
+            gMat.postTranslate(dx, dy)
+            for (im in multiSel) if (im !is StrokeItem) im.bounds.offset(dx, dy)
+        }
     }
 
     /**
@@ -1179,11 +1324,13 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 val dx = p[0] - mP0x
                 val dy = p[1] - mP0y
                 for ((i, im) in multiSel.withIndex()) {
+                    if (im is StrokeItem) continue // los trazos siguen la matriz del grupo
                     val s0 = gStart[i]
                     im.bounds.set(s0[0] + dx, s0[1] + dy, s0[2] + dx, s0[3] + dy)
                 }
                 grpB.set(gB0)
                 grpB.offset(dx, dy)
+                gMat.setTranslate(dx, dy)
             }
             M_GRESIZE -> {
                 val hx = HX[mHandle]
@@ -1202,7 +1349,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                     hy * v[1] / gh
                 }
                 f = f.coerceIn(Xf.MIN_MM / minOf(gw, gh), 20f)
+                gMat.setScale(f, f, a[0], a[1])
                 for ((i, im) in multiSel.withIndex()) {
+                    if (im is StrokeItem) continue
                     val s0 = gStart[i]
                     val cx = (s0[0] + s0[2]) / 2f
                     val cy = (s0[1] + s0[3]) / 2f
@@ -1220,7 +1369,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 val cx = gB0.centerX()
                 val cy = gB0.centerY()
                 val phi = Xf.angleDeg(p[0] - cx, p[1] - cy) - mAng0
+                gMat.setRotate(phi, cx, cy)
                 for ((i, im) in multiSel.withIndex()) {
+                    if (im is StrokeItem) continue
                     val s0 = gStart[i]
                     val r = Xf.rotate((s0[0] + s0[2]) / 2f - cx, (s0[1] + s0[3]) / 2f - cy, phi)
                     val nx = cx + r[0]
@@ -1233,6 +1384,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 grpRot = Xf.normalize(gRot0 + phi)
             }
         }
+        if (gHasStrokes) keepGroupInPage()
         single?.invalidate()
         invalidate()
     }
@@ -1684,7 +1836,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (k.parent == null) addView(k, FrameLayout.LayoutParams(dp(44), dp(44), Gravity.TOP or Gravity.START))
     }
 
-    /** Bloquea o desbloquea la imagen seleccionada (un paso del historial) y guarda. */
+    /** Bloquea o desbloquea el elemento seleccionado (imagen o trazo; un paso del historial) y guarda. */
     private fun setLocked(value: Boolean) {
         val item = selItem ?: return
         if (item.isLocked == value) return
@@ -1692,7 +1844,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         item.isLocked = value
         manip = 0
         mMoved = false
-        onItemsChanged?.invoke()
+        itemChanged(item)
         if (pre != null) onRecord?.invoke(pre)
         updateMore()
         single?.invalidate()
@@ -1711,7 +1863,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private var menu: PopupWindow? = null
     private var menuClosedAt = 0L
 
-    private class MenuAct(val icon: Int, val name: String, val rot: Float, val run: () -> Unit)
+    private class MenuAct(val icon: Int, val name: String, val rot: Float, val imgOnly: Boolean, val run: () -> Unit)
 
     private fun dismissMenu() {
         menu?.dismiss()
@@ -1738,6 +1890,15 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun flipSelected(horizontal: Boolean) {
         val item = selItem ?: return
         val pre = snapNow()
+        if (item is StrokeItem) {
+            // Un trazo no guarda "espejo": se reflejan sus puntos y el trazo nuevo ocupa su lugar en la capa (se guarda con los trazos).
+            replaceStroke(item, item.flipped(horizontal))
+            single?.invalidate()
+            invalidate()
+            onChanged?.invoke(index)
+            if (pre != null) onRecord?.invoke(pre)
+            return
+        }
         if (horizontal) item.isFlippedH = !item.isFlippedH else item.isFlippedV = !item.isFlippedV
         single?.invalidate()
         invalidate()
@@ -1779,7 +1940,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /**
      * Siete botones en columna, de arriba abajo: enlace, recortar, recorte libre, voltear horizontal, voltear vertical
-     * (el mismo ícono girado 90°), opacidad y bloquear. Recortar, voltear y opacidad ya funcionan; el resto avisa "Próximamente".
+     * (el mismo ícono girado 90°), opacidad y bloquear. Con una imagen todo funciona; con un trazo funcionan voltear, opacidad y
+     * bloquear, y enlace y recortes avisan "Próximamente".
      */
     private fun showMenu(anchor: View) {
         val ctx = context
@@ -1788,20 +1950,20 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(4), dp(4), dp(4), dp(4))
         col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
-        val isImg = selItem is ImageItem // con un trazo seleccionado todas las opciones dicen "Próximamente"
+        val isImg = selItem is ImageItem // enlace y recortes son de imágenes: con un trazo dicen "Próximamente"; el resto vale para ambos
         val acts = listOf(
-            MenuAct(Icons.LINK, "Enlace", 0f) { (selItem as? ImageItem)?.let { onEditLink?.invoke(it) } },
-            MenuAct(Icons.CROP, "Recortar", 0f) { enterCrop() },
-            MenuAct(Icons.CUT, "Recorte libre", 0f) { enterLasso() },
-            MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
-            MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
-            MenuAct(Icons.OPACITY, "Opacidad", 0f) { showOpacity(anchor) },
-            MenuAct(Icons.LOCK, "Bloquear objeto", 0f) { setLocked(true) }
+            MenuAct(Icons.LINK, "Enlace", 0f, true) { (selItem as? ImageItem)?.let { onEditLink?.invoke(it) } },
+            MenuAct(Icons.CROP, "Recortar", 0f, true) { enterCrop() },
+            MenuAct(Icons.CUT, "Recorte libre", 0f, true) { enterLasso() },
+            MenuAct(Icons.FLIP, "Voltear horizontal", 0f, false) { flipSelected(true) },
+            MenuAct(Icons.FLIP, "Voltear vertical", 90f, false) { flipSelected(false) },
+            MenuAct(Icons.OPACITY, "Opacidad", 0f, false) { showOpacity(anchor) },
+            MenuAct(Icons.LOCK, "Bloquear objeto", 0f, false) { setLocked(true) }
         )
         for (a in acts) {
             val btn = UiKit.iconBtn(ctx, a.icon, ink, 44, 22) {
                 dismissMenu()
-                if (isImg) a.run() else Toast.makeText(ctx, a.name + ": Próximamente", Toast.LENGTH_SHORT).show()
+                if (isImg || !a.imgOnly) a.run() else Toast.makeText(ctx, a.name + ": Próximamente", Toast.LENGTH_SHORT).show()
             }
             btn.rotation = a.rot
             col.addView(btn, LinearLayout.LayoutParams(dp(44), dp(44)))
@@ -1811,7 +1973,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     }
 
     /**
-     * Panel de opacidad: porcentaje y un SeekBar de 0 a 100. Cambia la opacidad de la imagen en tiempo real (el alpha con el
+     * Panel de opacidad: porcentaje y un SeekBar de 0 a 100. Cambia la opacidad del elemento en tiempo real (el alpha con el
      * que se dibuja) y la guarda al soltar el control o al cerrar el panel.
      */
     private fun showOpacity(anchor: View) {
@@ -1857,14 +2019,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             override fun onStopTrackingTouch(sb: SeekBar) {
                 if (dirty) {
                     dirty = false
-                    onItemsChanged?.invoke()
+                    itemChanged(item)
                 }
             }
         })
         val pw = makePopup(col) {
             if (dirty) {
                 dirty = false
-                onItemsChanged?.invoke()
+                itemChanged(item)
             }
         }
         placeBeside(pw, anchor, col.measuredWidth, col.measuredHeight)
@@ -1998,8 +2160,12 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val w0 = ovStroke.strokeWidth
         ovStroke.strokeWidth = 1f * d
         ovStroke.alpha = 0x99
+        // Un contorno por objeto; con muchos trazos seleccionados solo se dibuja el del grupo (para no frenar la hoja).
+        val boxes = multiSel.size <= 40
+        val gm = if (manip == M_GMOVE || manip == M_GRESIZE || manip == M_GROT) gMat else null
         for (im in multiSel) {
-            val q = pageToScreenQuad(im.bounds, im.rotation) ?: continue
+            if (im is StrokeItem && !boxes) continue
+            val q = pageToScreenQuad(im.bounds, im.rotation, if (im is StrokeItem) gm else null) ?: continue
             c.drawPath(q, ovStroke)
         }
         ovStroke.strokeWidth = w0
@@ -2056,13 +2222,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         }
     }
 
-    /** Cuadrilátero (en pantalla) de un rectángulo de la hoja con su giro. */
-    private fun pageToScreenQuad(b: RectF, rot: Float): Path? {
+    /** Cuadrilátero (en pantalla) de un rectángulo de la hoja con su giro; [m] (mm de la hoja) se aplica a sus esquinas si no es null. */
+    private fun pageToScreenQuad(b: RectF, rot: Float, m: Matrix? = null): Path? {
         val path = Path()
         val xs = intArrayOf(-1, 1, 1, -1)
         val ys = intArrayOf(-1, -1, 1, 1)
         for (i in 0 until 4) {
             val p = Xf.toPage(b.centerX(), b.centerY(), rot, xs[i] * b.width() / 2f, ys[i] * b.height() / 2f)
+            if (m != null) m.mapPoints(p)
             val s = pageToScreen(p[0], p[1]) ?: return null
             if (i == 0) path.moveTo(s[0], s[1]) else path.lineTo(s[0], s[1])
         }

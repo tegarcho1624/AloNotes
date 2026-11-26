@@ -242,8 +242,9 @@ internal class StrokeItem(var src: Stroke) : SelectableItem {
     override val scale: Float get() = 1f
     override var isFlippedH: Boolean = false
     override var isFlippedV: Boolean = false
-    override var opacity: Float = 1f
-    override var isLocked: Boolean = false
+    // Opacidad y bloqueo viajan con el trazo (se guardan en el archivo de trazos al confirmarse, ver PageViewport.commitStroke).
+    override var opacity: Float = src.opacity
+    override var isLocked: Boolean = src.locked
 
     // Estado al empezar el gesto (la transformación va de b0/rot0 a bounds/rotation).
     private val b0 = RectF()
@@ -276,11 +277,22 @@ internal class StrokeItem(var src: Stroke) : SelectableItem {
     fun transformed(): Stroke {
         val same = bounds.left == b0.left && bounds.top == b0.top && bounds.right == b0.right &&
             bounds.bottom == b0.bottom && rotation == rot0
-        if (same) return src
+        if (same && src.opacity == opacity && src.locked == isLocked) return src
         val c = cur
         if (c != null && curKey[0] == bounds.left && curKey[1] == bounds.top && curKey[2] == bounds.right &&
-            curKey[3] == bounds.bottom && curKey[4] == rotation
+            curKey[3] == bounds.bottom && curKey[4] == rotation && c.opacity == opacity && c.locked == isLocked
         ) return c
+        if (same) {
+            // Solo cambió la opacidad o el bloqueo: mismos puntos y mismo camino calculado.
+            val k = src.copyWith(opacity, isLocked)
+            cur = k
+            curKey[0] = bounds.left
+            curKey[1] = bounds.top
+            curKey[2] = bounds.right
+            curKey[3] = bounds.bottom
+            curKey[4] = rotation
+            return k
+        }
         val w0 = max(b0.width(), 1e-3f)
         val h0 = max(b0.height(), 1e-3f)
         val sx = bounds.width() / w0
@@ -309,7 +321,7 @@ internal class StrokeItem(var src: Stroke) : SelectableItem {
             i += 3
         }
         val f = kotlin.math.sqrt(kotlin.math.abs(sx * sy)).coerceIn(0.05f, 20f)
-        val res = Stroke(src.type, src.color, src.widthMm * f, out)
+        val res = Stroke(src.type, src.color, src.widthMm * f, out, opacity, isLocked, src.uid)
         cur = res
         curKey[0] = bounds.left
         curKey[1] = bounds.top
@@ -320,8 +332,37 @@ internal class StrokeItem(var src: Stroke) : SelectableItem {
     }
 
     /** Termina el gesto: devuelve el trazo transformado (para ponerlo en la capa) y vuelve a ajustar la caja a él, conservando el giro. */
-    fun bake(): Stroke {
-        val out = transformed()
+    fun bake(): Stroke = adopt(transformed())
+
+    /**
+     * El espejo del trazo (izquierda-derecha o arriba-abajo) sobre el centro de su caja y en los ejes de la caja (así sigue valiendo
+     * si está girado). La caja es simétrica respecto a su centro, así que no cambia. Devuelve el trazo nuevo (el actual no se toca).
+     */
+    fun flipped(horizontal: Boolean): Stroke {
+        val cx = bounds.centerX()
+        val cy = bounds.centerY()
+        val a = Math.toRadians(rotation.toDouble())
+        val cs = cos(a).toFloat()
+        val sn = sin(a).toFloat()
+        val p = src.pts
+        val out = FloatArray(p.size)
+        var i = 0
+        while (i < p.size) {
+            val dx = p[i] - cx
+            val dy = p[i + 1] - cy
+            var lx = dx * cs + dy * sn // al sistema de la caja (deshacer el giro)
+            var ly = -dx * sn + dy * cs
+            if (horizontal) lx = -lx else ly = -ly
+            out[i] = cx + lx * cs - ly * sn // de vuelta a la hoja
+            out[i + 1] = cy + lx * sn + ly * cs
+            out[i + 2] = p[i + 2]
+            i += 3
+        }
+        return Stroke(src.type, src.color, src.widthMm, out, opacity, isLocked, src.uid)
+    }
+
+    /** Hace de [out] el trazo de este elemento y reajusta la caja a sus puntos, conservando el giro. */
+    fun adopt(out: Stroke): Stroke {
         val cx = bounds.centerX()
         val cy = bounds.centerY()
         val a = Math.toRadians(rotation.toDouble())

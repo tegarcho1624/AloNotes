@@ -304,6 +304,23 @@ el ícono del launcher (color fijo).
   con `getPixel`) pasa a HSV (`Color.colorToHSV`): el puntito de la rueda, la barra de valor, el HEX y el color del lápiz se actualizan. Se cancela al cambiar de herramienta u hoja.
 - El selector ya era un `PopupWindow` (no mueve la hoja) anclado a los colores de la barra; se mantiene así.
 
+## Trazos como imágenes: barra de 7 íconos, menú de 3 puntos y grupos (v0.23.0)
+- **Barra de 7 íconos:** `PageViewport.hasSelection` ahora es verdadero con cualquier selección (imagen o trazo, uno o varios). Seleccionar todo toma imágenes **y** trazos
+  (sin bloquear) de la capa actual. Copiar/pegar usa `ObjectClipboard` (ahora guarda también trazos: puntos relativos al centro del grupo y opacidad; los pegados son trazos
+  nuevos y nacen desbloqueados). Al frente/al fondo reordena los trazos entre los trazos de su capa (las imágenes de una capa siempre van debajo de sus trazos). Eliminar quita
+  trazos e imágenes. **Guardar como sticker:** los trazos seleccionados se rasterizan JUNTOS en un solo PNG transparente (cada imagen sigue siendo un sticker aparte).
+- **Menú de 3 puntos:** con un trazo, *voltear horizontal/vertical* (refleja los puntos sobre el centro de su caja, en los ejes de la caja), *opacidad* y *bloquear* funcionan;
+  enlace, recortar y recorte libre siguen diciendo "Próximamente". Bloqueado: contorno gris, sin tiradores y el candado ocupa el lugar de los 3 puntos (igual que una imagen).
+- **Datos del trazo:** `Stroke` ahora tiene `opacity` (0..1, multiplica a la propia del tipo) y `locked`. Siguen siendo inmutables: cada cambio crea un trazo nuevo que ocupa el
+  mismo lugar de su capa y conserva el `uid` (así deshacer/rehacer vuelven a seleccionarlo). `Stroke.copyWith` comparte puntos y camino calculado. El borrador y los portapapeles
+  conservan opacidad y bloqueo. Pluma y pincel con opacidad < 1 se dibujan en una capa con alpha (para que sus formas no se mezclen dos veces).
+- **Archivo de trazos:** nueva versión `ALN2` (por trazo: 1 byte de banderas, bit 0 = bloqueado, y 1 byte de opacidad). Se leen `ALN1` y `ALN2`; se escribe `ALN2` solo si algún
+  trazo tiene opacidad o bloqueo (si no, `ALN1`, idéntico al de antes). Una versión anterior de la app no puede leer `ALN2`.
+- **Grupos con trazos:** el grupo mueve/redimensiona/gira los trazos con UNA matriz (`gMat`) al dibujar (`PageView.liftedSet`/`liftMatrix`), sin recalcular puntos en cada
+  movimiento; al soltar se fijan (`bakeGroupStrokes`: puntos y grosor nuevos, mismo lugar en la capa, mismo `uid`). Un grupo con trazos no puede salirse de la hoja
+  (`keepGroupInPage`). Con más de 40 objetos solo se dibuja el contorno del grupo. `refreshPage` y `reselect` usan conjuntos (no buscan trazo por trazo).
+- Todo (mover, voltear, opacidad, bloquear, copiar/pegar, orden, eliminar) es un paso del historial y guarda con el archivo de trazos (`onChanged`) y las capas.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

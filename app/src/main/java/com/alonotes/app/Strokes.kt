@@ -3,6 +3,7 @@ package com.alonotes.app
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -44,13 +45,26 @@ internal class FloatList {
  * pts = x, y, presión(0..1) por punto. Inmutable una vez creado (el borrador crea trazos nuevos).
  * type: 0 lápiz | 1 pluma | 2 pincel | 3 marca texto.
  */
-internal class Stroke(val type: Int, val color: Int, val widthMm: Float, val pts: FloatArray) {
+internal class Stroke(
+    val type: Int,
+    val color: Int,
+    val widthMm: Float,
+    val pts: FloatArray,
+    /** Opacidad del trazo (0..1), por encima de la propia del tipo (el marcador ya es translúcido). Se guarda en el archivo de trazos. */
+    val opacity: Float = 1f,
+    /** Bloqueado: no se puede mover, girar ni redimensionar. Se guarda en el archivo de trazos. */
+    val locked: Boolean = false,
+    uidFrom: Long = 0L
+) {
     val n: Int get() = pts.size / 3
     var cache: Path? = null
     var cacheScale = 0f
 
-    /** Identificador de esta sesión (no se guarda): sirve para volver a seleccionar un trazo después de deshacer o rehacer. */
-    val uid: Long = nextUid.incrementAndGet()
+    /**
+     * Identificador de esta sesión (no se guarda): sirve para volver a seleccionar un trazo después de deshacer o rehacer.
+     * Un trazo que reemplaza a otro (mover, voltear, opacidad, bloqueo) conserva el identificador del anterior.
+     */
+    val uid: Long = if (uidFrom != 0L) uidFrom else nextUid.incrementAndGet()
 
     private var bb: FloatArray? = null
 
@@ -73,6 +87,15 @@ internal class Stroke(val type: Int, val color: Int, val widthMm: Float, val pts
         val r = floatArrayOf(x0, y0, x1, y1)
         bb = r
         return r
+    }
+
+    /** El mismo trazo con otra opacidad o bloqueo. Comparte los puntos y el camino ya calculado (no se vuelve a construir). */
+    fun copyWith(opacity: Float = this.opacity, locked: Boolean = this.locked): Stroke {
+        val s = Stroke(type, color, widthMm, pts, opacity, locked, uid)
+        s.cache = cache
+        s.cacheScale = cacheScale
+        s.bb = bb
+        return s
     }
 
     private companion object {
@@ -311,9 +334,10 @@ internal object StrokeRender {
             s.cacheScale = scale
         }
         paint.color = s.color
+        val op = s.opacity.coerceIn(0f, 1f)
         if (s.type == 0 || s.type == 3) {
-            // 0 lápiz (casi opaco) | 3 marca texto (parcialmente transparente: se ve lo de abajo)
-            paint.alpha = if (s.type == 3) 115 else 235
+            // 0 lápiz (casi opaco) | 3 marca texto (parcialmente transparente: se ve lo de abajo); ambos por la opacidad del trazo
+            paint.alpha = ((if (s.type == 3) 115 else 235) * op).roundToInt()
             paint.style = Paint.Style.STROKE
             paint.strokeCap = Paint.Cap.ROUND
             paint.strokeJoin = Paint.Join.ROUND
@@ -321,12 +345,27 @@ internal object StrokeRender {
             c.drawPath(path, paint)
         } else {
             paint.style = Paint.Style.FILL
-            c.drawPath(path, paint)
-            if (s.n >= 2) {
-                val e = (s.n - 1) * 3
-                c.drawCircle(s.pts[0] * scale, s.pts[1] * scale, max(wMm(s, s.pts[2]) * scale / 2f, 0.4f), paint)
-                c.drawCircle(s.pts[e] * scale, s.pts[e + 1] * scale, max(wMm(s, s.pts[e + 2]) * scale / 2f, 0.4f), paint)
+            if (op < 1f) {
+                // Pluma y pincel se dibujan con varias formas que se tocan: en una capa con alpha para que no se mezclen dos veces.
+                val b = RectF()
+                path.computeBounds(b, true)
+                val pad = s.widthMm * scale * 2f + 2f
+                val sc = c.saveLayerAlpha(b.left - pad, b.top - pad, b.right + pad, b.bottom + pad, (255f * op).roundToInt())
+                fill(c, s, scale, paint, path)
+                c.restoreToCount(sc)
+            } else {
+                fill(c, s, scale, paint, path)
             }
+        }
+    }
+
+    /** Pluma y pincel: el contorno relleno y un círculo en cada punta. */
+    private fun fill(c: Canvas, s: Stroke, scale: Float, paint: Paint, path: Path) {
+        c.drawPath(path, paint)
+        if (s.n >= 2) {
+            val e = (s.n - 1) * 3
+            c.drawCircle(s.pts[0] * scale, s.pts[1] * scale, max(wMm(s, s.pts[2]) * scale / 2f, 0.4f), paint)
+            c.drawCircle(s.pts[e] * scale, s.pts[e + 1] * scale, max(wMm(s, s.pts[e + 2]) * scale / 2f, 0.4f), paint)
         }
     }
 }
@@ -400,7 +439,7 @@ internal object StrokeOps {
                 val dx = s.pts[i * 3] - x
                 val dy = s.pts[i * 3 + 1] - y
                 if (dx * dx + dy * dy <= r2) {
-                    if (run.size >= 6) out.add(Stroke(s.type, s.color, s.widthMm, run.toArray()))
+                    if (run.size >= 6) out.add(Stroke(s.type, s.color, s.widthMm, run.toArray(), s.opacity, s.locked))
                     run = FloatList()
                 } else {
                     run.add(s.pts[i * 3])
@@ -408,7 +447,7 @@ internal object StrokeOps {
                     run.add(s.pts[i * 3 + 2])
                 }
             }
-            if (run.size >= 6) out.add(Stroke(s.type, s.color, s.widthMm, run.toArray()))
+            if (run.size >= 6) out.add(Stroke(s.type, s.color, s.widthMm, run.toArray(), s.opacity, s.locked))
         }
         if (changed) {
             list.clear()
@@ -421,9 +460,13 @@ internal object StrokeOps {
 /**
  * Guardado de trazos: filesDir/strokes/<idNota>.bin (binario compacto: x, y en 0,01 mm y presión
  * en un byte). Se escribe en segundo plano y por archivo temporal. Archivo dañado => sin trazos.
+ * Dos versiones: "ALN1" (la de siempre) y "ALN2", que añade por trazo un byte de banderas (bit 0 = bloqueado) y otro de
+ * opacidad (0..255). Se lee cualquiera; se escribe ALN2 solo si algún trazo tiene opacidad o bloqueo (si no, ALN1,
+ * así las notas sin esas funciones siguen siendo iguales que antes).
  */
 internal object StrokeStore {
     private const val MAGIC = 0x414C4E31
+    private const val MAGIC2 = 0x414C4E32
     private val exec = Executors.newSingleThreadExecutor()
 
     private fun file(c: Context, id: String) = File(File(c.filesDir, "strokes"), "$id.bin")
@@ -443,7 +486,9 @@ internal object StrokeStore {
         if (!f.exists()) return doc
         try {
             DataInputStream(BufferedInputStream(FileInputStream(f))).use { i ->
-                if (i.readInt() != MAGIC) return doc
+                val magic = i.readInt()
+                val v2 = magic == MAGIC2
+                if (magic != MAGIC && !v2) return doc
                 val np = i.readInt()
                 if (np < 0 || np > 5000) throw IllegalStateException()
                 for (pi in 0 until np) {
@@ -454,6 +499,12 @@ internal object StrokeStore {
                         val t = i.readUnsignedByte()
                         val col = i.readInt()
                         val w = i.readFloat()
+                        var flags = 0
+                        var opb = 255
+                        if (v2) {
+                            flags = i.readUnsignedByte()
+                            opb = i.readUnsignedByte()
+                        }
                         val n = i.readInt()
                         if (n < 0 || n > 2000000) throw IllegalStateException()
                         val pts = FloatArray(n * 3)
@@ -462,7 +513,7 @@ internal object StrokeStore {
                             pts[k * 3 + 1] = i.readUnsignedShort() / 100f
                             pts[k * 3 + 2] = i.readUnsignedByte() / 255f
                         }
-                        if (n > 0) page.add(Stroke(t, col, w, pts))
+                        if (n > 0) page.add(Stroke(t, col, w, pts, opb / 255f, (flags and 1) != 0))
                     }
                     doc.pages.add(PageLayers(page))
                 }
@@ -484,8 +535,10 @@ internal object StrokeStore {
             val f = file(c, id)
             f.parentFile?.mkdirs()
             val tmp = File(f.parentFile, "$id.tmp")
+            var v2 = false
+            for (page in pages) for (s in page) if (s.opacity < 1f || s.locked) v2 = true
             DataOutputStream(BufferedOutputStream(FileOutputStream(tmp))).use { o ->
-                o.writeInt(MAGIC)
+                o.writeInt(if (v2) MAGIC2 else MAGIC)
                 o.writeInt(pages.size)
                 for (page in pages) {
                     o.writeInt(page.size)
@@ -493,6 +546,10 @@ internal object StrokeStore {
                         o.writeByte(s.type)
                         o.writeInt(s.color)
                         o.writeFloat(s.widthMm)
+                        if (v2) {
+                            o.writeByte(if (s.locked) 1 else 0)
+                            o.writeByte((s.opacity.coerceIn(0f, 1f) * 255f).roundToInt().coerceIn(0, 255))
+                        }
                         o.writeInt(s.n)
                         for (k in 0 until s.n) {
                             o.writeShort((s.pts[k * 3] * 100f).roundToInt().coerceIn(0, 65535))
@@ -526,6 +583,13 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
 
     /** Trazo seleccionado que se está transformando: se dibuja él (movido, girado...) en lugar del original. */
     var lifted: StrokeItem? = null
+
+    /**
+     * Trazos de un grupo que se está moviendo, redimensionando o girando: se dibujan con [liftMatrix] (mm de la hoja -> mm de la
+     * hoja, una sola matriz para todos), sin recalcular sus puntos mientras dura el gesto.
+     */
+    var liftedSet: Set<Stroke>? = null
+    var liftMatrix: Matrix? = null
     private var cx = 0f
     private var cy = 0f
     private var cr = -1f
@@ -561,6 +625,16 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
         rect.set(0f, 0f, width.toFloat(), height.toFloat())
         c.drawRect(rect, bg)
         val pl = page()
+        val ls = liftedSet
+        val gm = liftMatrix
+        var pm: Matrix? = null
+        if (ls != null && gm != null) {
+            // La matriz va en mm; el lienzo está en píxeles: píxeles -> mm, matriz del grupo, mm -> píxeles.
+            pm = Matrix()
+            pm.setScale(1f / scale, 1f / scale)
+            pm.postConcat(gm)
+            pm.postScale(scale, scale)
+        }
         if (pl != null) {
             for ((i, ly) in pl.layers.withIndex()) {
                 if (!ly.isVisible) continue
@@ -575,8 +649,16 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
                 }
                 val lf = lifted
                 for (s in ly.canvas) {
-                    if (lf != null && s === lf.src) StrokeRender.draw(c, lf.transformed(), scale, pen)
-                    else StrokeRender.draw(c, s, scale, pen)
+                    if (lf != null && s === lf.src) {
+                        StrokeRender.draw(c, lf.transformed(), scale, pen)
+                    } else if (pm != null && ls != null && ls.contains(s)) {
+                        val n = c.save()
+                        c.concat(pm)
+                        StrokeRender.draw(c, s, scale, pen)
+                        c.restoreToCount(n)
+                    } else {
+                        StrokeRender.draw(c, s, scale, pen)
+                    }
                 }
                 // El trazo en curso pertenece a la capa seleccionada.
                 if (i == pl.selected) live?.let { StrokeRender.draw(c, it, scale, pen) }

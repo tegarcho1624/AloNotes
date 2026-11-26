@@ -21,23 +21,40 @@ internal class ClipObj(
     val ld: String
 )
 
+/** Un trazo copiado: sus datos y sus puntos (x, y, presión) con x e y relativos al centro del grupo. */
+internal class ClipStroke(
+    val type: Int,
+    val color: Int,
+    val widthMm: Float,
+    val pts: FloatArray,
+    val opacity: Float
+)
+
+/** Lo que crea un pegado: las imágenes y los trazos nuevos (para ponerlos en la capa). */
+internal class Pasted(val images: List<ImageItem>, val strokes: List<Stroke>) {
+    val isEmpty: Boolean get() = images.isEmpty() && strokes.isEmpty()
+    val size: Int get() = images.size + strokes.size
+}
+
 /**
- * Portapapeles de objetos (imágenes) de una hoja. Copiar guarda las propiedades y una copia de cada archivo; pegar crea
+ * Portapapeles de objetos (imágenes y trazos) de una hoja. Copiar guarda las propiedades y una copia de cada archivo; pegar crea
  * objetos NUEVOS (id nuevo y archivo nuevo en images/<idNota>/), así que no comparten nada con los originales y se
- * pueden pegar varias veces, también en otra hoja o nota. Los pegados nacen desbloqueados.
+ * pueden pegar varias veces, también en otra hoja o nota. Los pegados nacen desbloqueados. Los trazos se copian con sus
+ * puntos (arreglo propio) y su opacidad; al pegarlos son trazos nuevos.
  */
 internal object ObjectClipboard {
     private var objs: List<ClipObj> = emptyList()
+    private var strokeObjs: List<ClipStroke> = emptyList()
     private var pastes = 0
 
-    val isEmpty: Boolean get() = objs.isEmpty()
+    val isEmpty: Boolean get() = objs.isEmpty() && strokeObjs.isEmpty()
 
-    val size: Int get() = objs.size
+    val size: Int get() = objs.size + strokeObjs.size
 
     private fun dir(c: Context) = File(c.filesDir, "clipboard_objects")
 
-    /** Reemplaza el contenido del portapapeles con [items] (no modifica los originales). */
-    fun copy(c: Context, items: List<ImageItem>) {
+    /** Reemplaza el contenido del portapapeles con [items] (imágenes y trazos; no modifica los originales). */
+    fun copy(c: Context, items: List<SelectableItem>) {
         val d = dir(c)
         try {
             d.deleteRecursively()
@@ -66,8 +83,23 @@ internal object ObjectClipboard {
         val gx = (x0 + x1) / 2f
         val gy = (y0 + y1) / 2f
         val out = ArrayList<ClipObj>()
+        val outStrokes = ArrayList<ClipStroke>()
         var n = 0
-        for (im in items) {
+        for (it in items) {
+            if (it is StrokeItem) {
+                val sp = it.src.pts
+                val rel = FloatArray(sp.size)
+                var k = 0
+                while (k < sp.size) {
+                    rel[k] = sp[k] - gx
+                    rel[k + 1] = sp[k + 1] - gy
+                    rel[k + 2] = sp[k + 2]
+                    k += 3
+                }
+                outStrokes.add(ClipStroke(it.src.type, it.src.color, it.src.widthMm, rel, it.src.opacity))
+            }
+        }
+        for (im in items.filterIsInstance<ImageItem>()) {
             if (!im.file.exists()) continue
             val dst = File(d, (n++).toString() + "_" + im.file.name)
             try {
@@ -84,6 +116,7 @@ internal object ObjectClipboard {
             )
         }
         objs = out
+        strokeObjs = outStrokes
         pastes = 0
     }
 
@@ -91,10 +124,37 @@ internal object ObjectClipboard {
      * Crea los objetos copiados centrados en ([cx], [cy]) (mm de la hoja). Cada pegado siguiente se corre 10 mm hacia
      * abajo y a la derecha, para que se vea que son copias. Devuelve la lista (vacía si no se pudo copiar ningún archivo).
      */
-    fun paste(c: Context, docId: String, cx: Float, cy: Float): List<ImageItem> {
+    fun paste(c: Context, docId: String, cx: Float, cy: Float): Pasted {
         val imgDir = File(c.filesDir, "images/$docId")
         imgDir.mkdirs()
         val off = 10f * pastes
+        // Los trazos se guardan con coordenadas de 0 a 655 mm: si el grupo se saldría de la hoja, todo el pegado se corre lo justo.
+        var fx = 0f
+        var fy = 0f
+        if (strokeObjs.isNotEmpty()) {
+            var x0 = Float.MAX_VALUE
+            var y0 = Float.MAX_VALUE
+            var x1 = -Float.MAX_VALUE
+            var y1 = -Float.MAX_VALUE
+            for (so in strokeObjs) {
+                var k = 0
+                while (k < so.pts.size) {
+                    val x = cx + off + so.pts[k]
+                    val y = cy + off + so.pts[k + 1]
+                    if (x < x0) x0 = x
+                    if (x > x1) x1 = x
+                    if (y < y0) y0 = y
+                    if (y > y1) y1 = y
+                    k += 3
+                }
+            }
+            val pw = cx * 2f
+            val ph = cy * 2f
+            if (x1 > pw) fx = pw - x1
+            if (y1 > ph) fy = ph - y1
+            if (x0 + fx < 0f) fx = -x0
+            if (y0 + fy < 0f) fy = -y0
+        }
         val out = ArrayList<ImageItem>()
         for (o in objs) {
             if (!o.file.exists()) continue
@@ -106,8 +166,8 @@ internal object ObjectClipboard {
             } catch (e: Exception) {
                 continue
             }
-            val mx = cx + o.dx + off
-            val my = cy + o.dy + off
+            val mx = cx + o.dx + off + fx
+            val my = cy + o.dy + off + fy
             out.add(
                 ImageItem(
                     id, dst, RectF(mx - o.w / 2f, my - o.h / 2f, mx + o.w / 2f, my + o.h / 2f), o.rot, o.baseW,
@@ -115,7 +175,19 @@ internal object ObjectClipboard {
                 )
             )
         }
-        if (out.isNotEmpty()) pastes++
-        return out
+        val outStrokes = ArrayList<Stroke>()
+        for (so in strokeObjs) {
+            val pts = FloatArray(so.pts.size)
+            var k = 0
+            while (k < pts.size) {
+                pts[k] = cx + off + fx + so.pts[k]
+                pts[k + 1] = cy + off + fy + so.pts[k + 1]
+                pts[k + 2] = so.pts[k + 2]
+                k += 3
+            }
+            outStrokes.add(Stroke(so.type, so.color, so.widthMm, pts, so.opacity, false))
+        }
+        if (out.isNotEmpty() || outStrokes.isNotEmpty()) pastes++
+        return Pasted(out, outStrokes)
     }
 }

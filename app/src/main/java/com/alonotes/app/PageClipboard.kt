@@ -74,7 +74,7 @@ internal object PageClipboard {
                     val b = im.bounds
                     imgs.add(ClipImage(dst, b.left, b.top, b.right, b.bottom, im.rotation, im.baseW, im.isFlippedH, im.isFlippedV, im.opacity, im.linkType, im.linkData, im.isLocked))
                 }
-                val strokes = ly.canvas.map { s -> Stroke(s.type, s.color, s.widthMm, s.pts.copyOf()) }
+                val strokes = ly.canvas.map { s -> Stroke(s.type, s.color, s.widthMm, s.pts.copyOf(), s.opacity, s.locked) }
                 layers.add(ClipLayer(ly.name, ly.isVisible, ly.opacity, strokes, imgs))
             }
             out.add(ClipPage(js.toString(), layers, pl.selected))
@@ -99,7 +99,7 @@ internal object PageClipboard {
             val ls = ArrayList<Layer>()
             for ((i, cl) in cp.layers.withIndex()) {
                 val ly = Layer((i + 1).toLong(), cl.name, cl.isVisible, cl.opacity)
-                for (s in cl.strokes) ly.canvas.add(Stroke(s.type, s.color, s.widthMm, s.pts.copyOf()))
+                for (s in cl.strokes) ly.canvas.add(Stroke(s.type, s.color, s.widthMm, s.pts.copyOf(), s.opacity, s.locked))
                 for (im in cl.images) {
                     if (!im.file.exists()) continue
                     val id = UUID.randomUUID().toString()

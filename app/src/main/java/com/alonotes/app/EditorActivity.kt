@@ -342,11 +342,21 @@ class EditorActivity : Activity() {
     /**
      * "Guardar como sticker" (botón de la barra de selección): cada imagen seleccionada se dibuja tal como se ve (su recorte,
      * su giro y su espejo; sin la opacidad) en un PNG con fondo transparente y se guarda en la categoría actual del menú.
+     * Los trazos seleccionados se dibujan juntos en un solo PNG transparente.
      */
     private fun saveAsSticker() {
         val sel = selectedImages()
-        if (sel.isEmpty()) {
-            toast("Selecciona una imagen primero")
+        // Los trazos seleccionados se rasterizan JUNTOS en un solo sticker (en el orden en que se dibujan). Se copian sin su camino
+        // calculado ni su opacidad: así el hilo de fondo no toca nada que la hoja esté usando.
+        val picked = selectedStrokes().toSet()
+        val drawn = ArrayList<Stroke>()
+        if (picked.isNotEmpty()) {
+            for (ly in strokes.page(viewport.index).layers) {
+                for (s in ly.canvas) if (picked.contains(s)) drawn.add(Stroke(s.type, s.color, s.widthMm, s.pts, 1f, false))
+            }
+        }
+        if (sel.isEmpty() && drawn.isEmpty()) {
+            toast("Selecciona un objeto primero")
             return
         }
         val dir = StickerStore.dir(this)
@@ -360,6 +370,14 @@ class EditorActivity : Activity() {
                 StickerStore.add(this, cat, f)
                 saved++
             }
+            if (drawn.isNotEmpty()) {
+                val out = renderStrokesForSticker(drawn)
+                val f = if (out != null) ImageFiles.write(out, dir, UUID.randomUUID().toString()) else null
+                if (f != null) {
+                    StickerStore.add(this, cat, f)
+                    saved++
+                }
+            }
             runOnUiThread {
                 if (isFinishing) return@runOnUiThread
                 if (saved == 0) {
@@ -370,6 +388,43 @@ class EditorActivity : Activity() {
                 }
             }
         }.start()
+    }
+
+    /**
+     * Rasteriza trazos (un PNG transparente del tamaño de su caja más un margen del grosor). Densidad: la que quepa en 1024 px,
+     * entre 1 y 12 píxeles por mm.
+     */
+    private fun renderStrokesForSticker(list: List<Stroke>): android.graphics.Bitmap? {
+        var x0 = Float.MAX_VALUE
+        var y0 = Float.MAX_VALUE
+        var x1 = -Float.MAX_VALUE
+        var y1 = -Float.MAX_VALUE
+        var pad = 0f
+        for (s in list) {
+            val bb = s.bbox()
+            if (bb[0] < x0) x0 = bb[0]
+            if (bb[1] < y0) y0 = bb[1]
+            if (bb[2] > x1) x1 = bb[2]
+            if (bb[3] > y1) y1 = bb[3]
+            if (s.widthMm > pad) pad = s.widthMm
+        }
+        pad += 0.5f
+        val wMm = x1 - x0 + 2f * pad
+        val hMm = y1 - y0 + 2f * pad
+        if (list.isEmpty() || wMm <= 0f || hMm <= 0f) return null
+        val k = (1024f / maxOf(wMm, hMm)).coerceIn(1f, 12f)
+        val pw = Math.ceil((wMm * k).toDouble()).toInt().coerceAtLeast(1)
+        val ph = Math.ceil((hMm * k).toDouble()).toInt().coerceAtLeast(1)
+        return try {
+            val out = android.graphics.Bitmap.createBitmap(pw, ph, android.graphics.Bitmap.Config.ARGB_8888)
+            val c = android.graphics.Canvas(out)
+            c.translate(-(x0 - pad) * k, -(y0 - pad) * k)
+            val pen = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
+            for (s in list) StrokeRender.draw(c, s, k, pen)
+            out
+        } catch (e: Throwable) {
+            null
+        }
     }
 
     /**
@@ -424,8 +479,11 @@ class EditorActivity : Activity() {
 
     private fun selectedImages(): List<ImageItem> = viewport.currentSelection().filterIsInstance<ImageItem>()
 
+    /** Los trazos (los de la capa, no los elementos de selección) que están seleccionados. */
+    private fun selectedStrokes(): List<Stroke> = viewport.currentSelection().filterIsInstance<StrokeItem>().map { it.src }
+
     private fun copySelection() {
-        val sel = selectedImages()
+        val sel = viewport.currentSelection()
         if (sel.isEmpty()) {
             toast("Selecciona uno o varios objetos")
             return
@@ -448,15 +506,20 @@ class EditorActivity : Activity() {
             return
         }
         val made = ObjectClipboard.paste(this, docId, sp.wMm / 2f, sp.hMm / 2f)
-        if (made.isEmpty()) {
+        if (made.isEmpty) {
             toast("No se pudo pegar")
             return
         }
         val pre = pl.snapshot()
-        layer.items.addAll(made)
+        layer.items.addAll(made.images)
+        layer.canvas.addAll(made.strokes)
         history.record(pre)
-        viewport.setSelection(made)
+        val now = ArrayList<SelectableItem>()
+        now.addAll(made.images)
+        for (s in made.strokes) now.add(StrokeItem(s))
+        viewport.setSelection(now)
         viewport.refreshPage()
+        persistStrokes()
         persistLayers()
         toast(if (made.size == 1) "1 objeto pegado" else made.size.toString() + " objetos pegados")
     }
@@ -464,21 +527,36 @@ class EditorActivity : Activity() {
     /** Lleva lo seleccionado al final de la lista de su capa (al frente) o al inicio (al fondo); el orden de la lista es el orden de dibujo. */
     private fun reorderSelection(front: Boolean) {
         val sel = selectedImages()
-        if (sel.isEmpty()) {
+        val selStrokes = selectedStrokes()
+        if (sel.isEmpty() && selStrokes.isEmpty()) {
             toast("Selecciona uno o varios objetos")
             return
         }
         val pl = strokes.page(viewport.index)
         val pre = pl.snapshot()
         val set = HashSet<ImageItem>(sel)
+        val strokeSet = HashSet<Stroke>(selStrokes)
         var changed = false
+        var strokesChanged = false
         for (ly in pl.layers) {
             val mine = ly.items.filter { set.contains(it) }
-            if (mine.isEmpty()) continue
-            val before = ArrayList(ly.items)
-            ly.items.removeAll(mine.toSet())
-            if (front) ly.items.addAll(mine) else ly.items.addAll(0, mine)
-            if (before != ly.items) changed = true
+            if (mine.isNotEmpty()) {
+                val before = ArrayList(ly.items)
+                ly.items.removeAll(mine.toSet())
+                if (front) ly.items.addAll(mine) else ly.items.addAll(0, mine)
+                if (before != ly.items) changed = true
+            }
+            // Los trazos se reordenan entre los trazos de su capa (las imágenes de la capa siempre se dibujan debajo de ellos).
+            val mineS = ly.canvas.filter { strokeSet.contains(it) }
+            if (mineS.isNotEmpty()) {
+                val beforeS = ArrayList(ly.canvas)
+                ly.canvas.removeAll(mineS.toSet())
+                if (front) ly.canvas.addAll(mineS) else ly.canvas.addAll(0, mineS)
+                if (beforeS != ly.canvas) {
+                    changed = true
+                    strokesChanged = true
+                }
+            }
         }
         if (!changed) {
             toast(if (front) "Ya está al frente" else "Ya está al fondo")
@@ -486,24 +564,32 @@ class EditorActivity : Activity() {
         }
         history.record(pre)
         viewport.refreshPage()
+        if (strokesChanged) persistStrokes() // el orden de los trazos va en el archivo de trazos
         persistLayers()
     }
 
     private fun deleteSelection() {
         val sel = selectedImages()
-        if (sel.isEmpty()) {
+        val selStrokes = selectedStrokes()
+        if (sel.isEmpty() && selStrokes.isEmpty()) {
             toast("Selecciona uno o varios objetos")
             return
         }
         val pl = strokes.page(viewport.index)
         val pre = pl.snapshot()
         val set = HashSet<ImageItem>(sel)
-        for (ly in pl.layers) ly.items.removeAll(set)
+        val strokeSet = HashSet<Stroke>(selStrokes)
+        for (ly in pl.layers) {
+            ly.items.removeAll(set)
+            if (strokeSet.isNotEmpty()) ly.canvas.removeAll(strokeSet)
+        }
         history.record(pre)
         viewport.setSelection(emptyList())
         viewport.refreshPage()
-        persistLayers()
-        toast(if (sel.size == 1) "1 objeto eliminado" else sel.size.toString() + " objetos eliminados")
+        if (strokeSet.isNotEmpty()) persistStrokes()
+        persistLayers() // también cambia cuántos trazos tiene cada capa
+        val n = sel.size + selStrokes.size
+        toast(if (n == 1) "1 objeto eliminado" else n.toString() + " objetos eliminados")
     }
 
     // ---------- Enlaces de imagen ----------
