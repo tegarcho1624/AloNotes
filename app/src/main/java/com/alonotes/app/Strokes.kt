@@ -19,10 +19,14 @@ import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
+import kotlin.math.abs
+import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /** Lista de floats sin boxing (puntos de un trazo en curso). */
 internal class FloatList {
@@ -38,6 +42,71 @@ internal class FloatList {
     operator fun get(i: Int): Float = a[i]
     fun isEmpty(): Boolean = size == 0
     fun toArray(): FloatArray = a.copyOf(size)
+}
+
+/**
+ * Formas básicas como puntos de trazo. Una forma NO es un tipo de objeto nuevo: se convierte en la lista de puntos de su CONTORNO
+ * (x, y, presión; ≤ 0,6 mm entre puntos, igual que el lápiz, así que el borrador la parte como a cualquier trazo) y se guarda como
+ * un [Stroke] normal. Coordenadas en mm de la hoja.
+ */
+internal object ShapeGen {
+    const val LINE = 0
+    const val RECT = 1
+    const val CIRCLE = 2
+
+    private const val STEP = 0.6f // mm entre puntos
+    private const val PRESSURE = 0.7f // presión fija: el lápiz da grosor parejo
+    private const val MIN_MM = 0.5f // más chica que esto es un toque, no una forma
+
+    /**
+     * Añade a [out] los puntos de la forma [kind] que va del punto de inicio (x0, y0) al punto actual (x1, y1). No añade nada si es
+     * demasiado chica. Línea: del inicio al actual. Rectángulo: el contorno con esas dos esquinas opuestas. Círculo: centro en el
+     * inicio y radio hasta el actual (limitado para que el círculo quepa en la hoja de [pageW] x [pageH]).
+     */
+    fun fill(out: FloatList, kind: Int, x0: Float, y0: Float, x1: Float, y1: Float, pageW: Float, pageH: Float) {
+        when (kind) {
+            RECT -> {
+                if (abs(x1 - x0) < MIN_MM && abs(y1 - y0) < MIN_MM) return
+                point(out, x0, y0)
+                edge(out, x0, y0, x1, y0)
+                edge(out, x1, y0, x1, y1)
+                edge(out, x1, y1, x0, y1)
+                edge(out, x0, y1, x0, y0) // vuelve al inicio: contorno cerrado
+            }
+            CIRCLE -> {
+                val room = min(min(x0, pageW - x0), min(y0, pageH - y0))
+                val r = min(hypot(x1 - x0, y1 - y0), room)
+                if (r < MIN_MM) return
+                val n = max(16, ceil(2.0 * Math.PI * r / STEP).toInt())
+                for (k in 0..n) {
+                    val a = 2.0 * Math.PI * k / n // con seno y coseno; k = n cierra el círculo
+                    point(out, x0 + r * cos(a).toFloat(), y0 + r * sin(a).toFloat())
+                }
+            }
+            else -> {
+                if (hypot(x1 - x0, y1 - y0) < MIN_MM) return
+                point(out, x0, y0)
+                edge(out, x0, y0, x1, y1)
+            }
+        }
+    }
+
+    private fun point(out: FloatList, x: Float, y: Float) {
+        out.add(x)
+        out.add(y)
+        out.add(PRESSURE)
+    }
+
+    /** Puntos intermedios de (xa, ya) a (xb, yb), sin repetir el de partida y llegando al final. */
+    private fun edge(out: FloatList, xa: Float, ya: Float, xb: Float, yb: Float) {
+        val len = hypot(xb - xa, yb - ya)
+        if (len < 0.01f) return
+        val n = ceil(len / STEP).toInt().coerceAtLeast(1)
+        for (k in 1..n) {
+            val t = k / n.toFloat()
+            point(out, xa + (xb - xa) * t, ya + (yb - ya) * t)
+        }
+    }
 }
 
 /**

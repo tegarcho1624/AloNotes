@@ -210,7 +210,7 @@ class EditorActivity : Activity() {
         bar.addView(tb(Icons.GRID, ink) { openPages() }, UiKit.box(this, 44))
         bar.addView(tb(Icons.PLUS, ink) { createPages() }, UiKit.box(this, 44))
         bar.addView(View(this), LinearLayout.LayoutParams(dp(22), 1))
-        // Lápiz (1), borrador (2) y marca texto (3): se resaltan y muestran sus opciones; el resto, próximamente
+        // Lápiz (1), borrador (2), marca texto (3), seleccionar (4) y formas (5): se resaltan y muestran sus opciones; el resto, próximamente
         val penBtn = tb(PenOptions.typeIcon(PenStore.type(this)), ink) { pickTool(1) }
         if (tool == 1 && !cont) UiKit.ripple(this, penBtn, 12, ThemeUtils.accentBg(this))
         bar.addView(penBtn, UiKit.box(this, 44))
@@ -225,10 +225,12 @@ class EditorActivity : Activity() {
             val btn = when (t) {
                 Icons.IMAGE -> tb(t, ink) { editOnly { openGallery() } }
                 Icons.SELECT -> tb(t, ink) { pickTool(4) }
+                Icons.SHAPES -> tb(t, ink) { pickTool(5) }
                 Icons.STAR -> tb(t, ink) { editOnly { openStickers() } }
                 else -> tb(t, ink) { editOnly { UiKit.soon(this) } }
             }
             if (t == Icons.SELECT && tool == 4 && !cont) UiKit.ripple(this, btn, 12, ThemeUtils.accentBg(this))
+            if (t == Icons.SHAPES && tool == 5 && !cont) UiKit.ripple(this, btn, 12, ThemeUtils.accentBg(this))
             bar.addView(btn, UiKit.box(this, 44))
         }
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
@@ -238,6 +240,9 @@ class EditorActivity : Activity() {
             PenOptions.buildEraser(this, bar) { buildBar() }
         } else if (tool == 3 && !cont) {
             PenOptions.buildHighlighter(this, bar) { buildBar() }
+        } else if (tool == 5 && !cont) {
+            // Formas: línea, cuadrado y círculo; a la derecha, los mismos grosores y colores del lápiz
+            PenOptions.buildShapes(this, bar, viewport.shape, { viewport.shape = it }) { buildBar() }
         } else if (tool == 4 && !cont && hasSel) {
             // Herramienta Seleccionar CON algo seleccionado: en vez de las flechas de página, los 7 íconos de selección (en este orden)
             val defs = listOf(

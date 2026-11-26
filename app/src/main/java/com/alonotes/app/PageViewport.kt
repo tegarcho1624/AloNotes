@@ -56,7 +56,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         private set
     var onPage: (() -> Unit)? = null
 
-    /** 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar (solo en la vista de una hoja). */
+    /** 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar, 5 formas (solo en la vista de una hoja). */
     var tool = 0
         set(v) {
             if (v != field) {
@@ -177,6 +177,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             return true
         }
     })
+
+    /** Forma de la herramienta formas (5): [ShapeGen.LINE], [ShapeGen.RECT] o [ShapeGen.CIRCLE]. La elige el editor. */
+    var shape = ShapeGen.LINE
+
+    // Formas: punto de inicio del arrastre (mm de la hoja); shapeOn = el arrastre empezó dentro de la hoja.
+    private var shapeOn = false
+    private var shapeX0 = 0f
+    private var shapeY0 = 0f
 
     // Dibujo.
     private var penDown = false
@@ -675,14 +683,22 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 penColor = PenStore.hlColors(context)[PenStore.hlColorIdx(context)]
                 penW = PenStore.hlWidthMm(PenStore.hlWidth(context))
             } else {
-                penType = PenStore.type(context)
+                // Las formas se guardan como trazos de lápiz (grosor parejo) con el color y el grosor del lápiz.
+                penType = if (tool == 5) 0 else PenStore.type(context)
                 penColor = PenStore.colors(context)[PenStore.colorIdx(context)]
                 penW = PenStore.widthMm(PenStore.width(context))
             }
             penK = 1f - (PenStore.smoothing(context) / 100f) * 0.9f
             live = null
             val sp = v.spec
-            if (pt[0] in 0f..sp.wMm && pt[1] in 0f..sp.hMm) startLive(pt[0], pt[1], lastP)
+            if (tool == 5) {
+                // Forma: se guarda el punto de inicio; la vista previa aparece al arrastrar.
+                shapeOn = pt[0] in 0f..sp.wMm && pt[1] in 0f..sp.hMm
+                shapeX0 = pt[0]
+                shapeY0 = pt[1]
+            } else if (pt[0] in 0f..sp.wMm && pt[1] in 0f..sp.hMm) {
+                startLive(pt[0], pt[1], lastP)
+            }
             refreshLive()
         }
     }
@@ -790,7 +806,26 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         if (erasedDirty) single?.invalidate()
     }
 
+    /**
+     * Forma desde el punto de inicio hasta (x, y): genera sus puntos y los deja como el trazo "en curso" (es la vista previa; al
+     * soltar se guarda tal cual, como un trazo normal). El otro extremo no se sale de la hoja. Si es demasiado chica, no hay forma.
+     */
+    private fun shapeTo(x: Float, y: Float) {
+        if (!shapeOn) return
+        val sp = single?.spec ?: return
+        val l = FloatList()
+        ShapeGen.fill(l, shape, shapeX0, shapeY0, x.coerceIn(0f, sp.wMm), y.coerceIn(0f, sp.hMm), sp.wMm, sp.hMm)
+        live = if (l.isEmpty()) null else l
+    }
+
     private fun drawMove(e: MotionEvent, stylus: Boolean) {
+        if (tool == 5) {
+            // Solo importa dónde está ahora el dedo: no se recorre el historial de puntos del movimiento.
+            val pt = toPage(e.x, e.y)
+            if (pt != null) shapeTo(pt[0], pt[1])
+            refreshLive()
+            return
+        }
         for (h in 0 until e.historySize) {
             feed(e.getHistoricalX(h), e.getHistoricalY(h), e.getHistoricalPressure(h), e.getHistoricalEventTime(h), stylus)
         }
@@ -808,11 +843,18 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
             erasedDirty = false
         } else {
-            // Último punto sin suavizar para que el trazo llegue hasta donde se levantó la punta.
-            val pt = toPage(e.x, e.y)
-            val sp = single?.spec
-            if (pt != null && sp != null && live != null && pt[0] in 0f..sp.wMm && pt[1] in 0f..sp.hMm) {
-                addDense(pt[0], pt[1], lastP)
+            if (tool == 5) {
+                // La forma llega hasta donde se levantó la punta y se guarda como un trazo (un paso del historial, en commitLive).
+                val pt = toPage(e.x, e.y)
+                if (pt != null) shapeTo(pt[0], pt[1])
+                shapeOn = false
+            } else {
+                // Último punto sin suavizar para que el trazo llegue hasta donde se levantó la punta.
+                val pt = toPage(e.x, e.y)
+                val sp = single?.spec
+                if (pt != null && sp != null && live != null && pt[0] in 0f..sp.wMm && pt[1] in 0f..sp.hMm) {
+                    addDense(pt[0], pt[1], lastP)
+                }
             }
             commitLive()
         }
@@ -902,6 +944,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
             erasedDirty = false
         }
+        shapeOn = false
         if (live != null) {
             live = null
             single?.live = null

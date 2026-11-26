@@ -336,6 +336,17 @@ el ícono del launcher (color fijo).
   enlaces de más de 16000 caracteres no se guardan). Los `ALN2` de la versión anterior (sin bit 1) se leen igual. Color y grosor ya se guardaban en `ALN1` y `ALN2`. Se escribe `ALN2` solo si
   algún trazo tiene opacidad, bloqueo o enlace. Copiar/pegar (objetos y hojas), el borrador (cada trozo conserva el enlace) y mover/girar/voltear conservan el enlace.
 
+## Formas básicas: línea, cuadrado y círculo (v0.25.0)
+- **No hay un tipo de objeto nuevo:** una forma se convierte en los puntos de su contorno (`ShapeGen` en `Strokes.kt`, ≤ 0,6 mm entre puntos, como el lápiz) y se guarda como un `Stroke` normal
+  (tipo 0, lápiz: grosor parejo). Por eso hereda selección, menú de 3 puntos, los 7 íconos, copiar/pegar, opacidad, enlace, bloqueo, color, grosor y el borrador (que la parte como a cualquier trazo).
+- **Barra:** el ícono de formas (`Icons.SHAPES`) activa la herramienta 5. En la barra central salen línea, cuadrado y círculo (`Icons.SHAPE_LINE/RECT/CIRCLE`, la elegida resaltada) y, a la derecha, los
+  mismos grosores y colores del lápiz (`PenStore`; toque largo en un color = selector). `PenOptions.buildShapes` los arma; la parte de grosor y color se movió sin cambios de `build` a `widthAndColors`,
+  que usan el lápiz y las formas. La forma elegida vive en `PageViewport.shape`.
+- **Dibujo (`PageViewport`):** al tocar se guarda el punto de inicio (debe estar dentro de la hoja); al arrastrar `shapeTo` genera los puntos desde el inicio hasta el punto actual y los deja como el trazo "en curso"
+  (`live`), que es la vista previa; al soltar `commitLive` lo guarda en la capa activa con UN paso del historial. Línea: del inicio al punto actual. Cuadrado/rectángulo: solo el contorno, con inicio y punto actual
+  como esquinas opuestas. Círculo: centro en el inicio y radio hasta el punto actual (con seno y coseno); el radio se limita para que el círculo quepa en la hoja. El otro extremo no sale de la hoja. Una forma
+  de menos de 0,5 mm (un toque) no se guarda. Con la herramienta de formas no se abren enlaces al tocar (igual que con el borrador y seleccionar).
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

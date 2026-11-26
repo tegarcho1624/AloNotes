@@ -77,6 +77,9 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val SEND_BACK = 60
         const val COLOR_WHEEL = 61
         const val THICKNESS = 62
+        const val SHAPE_LINE = 63
+        const val SHAPE_RECT = 64
+        const val SHAPE_CIRCLE = 65
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -436,6 +439,9 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
                     ln(c, 12 + 2.6f * cs, 12 + 2.6f * sn, 12 + 9f * cs, 12 + 9f * sn)
                 }
             }
+            SHAPE_LINE -> ln(c, 5, 19, 19, 5)
+            SHAPE_RECT -> rr(c, 5, 5, 19, 19, 1.5f)
+            SHAPE_CIRCLE -> circ(c, 12, 12, 8)
             THICKNESS -> {
                 // Cuatro líneas de grosor creciente
                 p.strokeWidth = 1f

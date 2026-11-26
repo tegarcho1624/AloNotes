@@ -48,6 +48,12 @@ internal object PenOptions {
         bar.addView(smBtn, UiKit.box(a, 44))
         bar.addView(divider(a))
 
+        widthAndColors(a, bar, rebuild)
+    }
+
+    /** Tres grosores y cuatro colores del lápiz (los mismos para el lápiz y para las formas). */
+    private fun widthAndColors(a: Activity, bar: LinearLayout, rebuild: () -> Unit) {
+        fun dp(v: Number) = UiKit.dp(a, v)
         val colors = PenStore.colors(a)
         val sel = PenStore.colorIdx(a)
         val lineCol = if (ColorUtils.calculateLuminance(colors[sel]) < 0.12) 0xFFBDBDBD.toInt() else colors[sel]
@@ -67,6 +73,23 @@ internal object PenOptions {
         bar.addView(divider(a))
 
         colorGroup(a, bar, colors, sel, { i -> PenStore.setColorIdx(a, i) }, { i, c -> PenStore.setColor(a, i, c) }, rebuild)
+    }
+
+    /** Barra de las formas: línea, cuadrado y círculo (la elegida resaltada); a la derecha, los mismos grosores y colores del lápiz. */
+    fun buildShapes(a: Activity, bar: LinearLayout, sel: Int, onSelect: (Int) -> Unit, rebuild: () -> Unit) {
+        val hi = ThemeUtils.accentHi(a)
+        val icons = intArrayOf(Icons.SHAPE_LINE, Icons.SHAPE_RECT, Icons.SHAPE_CIRCLE)
+        for (i in 0..2) {
+            val b = UiKit.iconBtn(a, icons[i], hi, 44, 24)
+            if (i == sel) UiKit.ripple(a, b, 12, ThemeUtils.accentBg(a))
+            b.setOnClickListener {
+                onSelect(i)
+                rebuild()
+            }
+            bar.addView(b, UiKit.box(a, 44))
+        }
+        bar.addView(divider(a))
+        widthAndColors(a, bar, rebuild)
     }
 
     private fun visible(c: Int): Int =
