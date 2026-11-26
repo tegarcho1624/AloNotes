@@ -20,6 +20,25 @@ internal class ItemSnap(
     val lk: Boolean
 )
 
+/** Estado lógico de un texto (es mutable: se guarda una copia de sus datos). */
+internal class TextSnap(
+    val id: String,
+    val text: String,
+    val size: Float,
+    val family: String,
+    val italic: Boolean,
+    val bold: Boolean,
+    val underline: Boolean,
+    val color: Int,
+    val l: Float,
+    val t: Float,
+    val r: Float,
+    val b: Float,
+    val rot: Float,
+    val op: Float,
+    val lk: Boolean
+)
+
 /** Estado lógico de una capa. Los trazos son inmutables, así que se guardan las referencias (no se copian los puntos). */
 internal class LayerSnap(
     val id: Long,
@@ -27,7 +46,8 @@ internal class LayerSnap(
     val visible: Boolean,
     val opacity: Float,
     val strokes: List<Stroke>,
-    val items: List<ItemSnap>
+    val items: List<ItemSnap>,
+    val texts: List<TextSnap> = emptyList()
 )
 
 /** Estado lógico de una hoja: sus capas con trazos e imágenes, la capa seleccionada y el contador de nombres. */

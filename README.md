@@ -347,6 +347,26 @@ el ícono del launcher (color fijo).
   como esquinas opuestas. Círculo: centro en el inicio y radio hasta el punto actual (con seno y coseno); el radio se limita para que el círculo quepa en la hoja. El otro extremo no sale de la hoja. Una forma
   de menos de 0,5 mm (un toque) no se guarda. Con la herramienta de formas no se abren enlaces al tocar (igual que con el borrador y seleccionar).
 
+## Herramienta de texto (v0.26.0)
+- **Objeto nuevo `TextItem`** (`Selectables.kt`, implementa `SelectableItem`): `text`, `fontSize`, `fontFamily` (id de `FontManager`: `sys:`, `asset:` o `file:`), `isItalic`, `isBold`, `isUnderline`,
+  `color`, `x`/`y` (centro del recuadro), `rotation`, `bounds` (recuadro sin rotar), además de `opacity` y `isLocked`. Una sola línea. El tamaño está en "unidades de texto": 1 unidad =
+  0,2 mm (`TextItem.MM_PER_UNIT`), tamaño 40 = letra de 8 mm; rango 8 a 200. `bounds` es siempre el tamaño NATURAL del texto (se mide con `Paint`); mientras se redimensiona el texto se
+  dibuja ajustado al recuadro y al soltar `bakeScale()` pasa el cambio de escala al tamaño de la letra. Solo se redimensiona por las esquinas (conserva la proporción).
+- **Datos:** `Layer.texts` (junto a `items` y `canvas`; las imágenes y los trazos no cambian). Se dibujan ENCIMA de las imágenes y DEBAJO de los trazos de su capa (el marcador se ve sobre el
+  texto). Guardado: `PageState.texts` (lista de `TextDto` por capa) en `layers/<idNota>.json`; los archivos viejos no lo traen y cargan igual. Historial: `TextSnap` en `LayerSnap.texts`.
+  Copiar/pegar hoja (`PageClipboard`) y las miniaturas (`PageManagerActivity`) incluyen los textos.
+- **Barra (herramienta 6, la "T"):** `TextOptions.build` -> `Size N` (abre un panel con `SeekBar` y DONE; el número se actualiza al mover), fuente (hoja con la lista de `FontManager`, la misma de
+  Ajustes, cada una en su tipografía; solo cambia el texto, no la fuente de la app), I, B, U (resaltados si están activos) y los cuatro colores del lápiz (`PenOptions.colorsOnly`).
+  El estilo se guarda en `TextStore` (SharedPreferences `text`: size, family, italic, bold, underline; el color es el del lápiz).
+- **Escritura (`PageViewport`):** con la herramienta texto, un toque corto y quieto en un espacio vacío abre un `EditText` transparente en ese punto (con teclado) y, sobre un texto existente, lo
+  abre para editarlo (se carga su estilo en la barra). Se ve con el tamaño, fuente, estilos y color de la barra y los cambios de la barra se aplican al instante (`textStyleChanged`). Enter, o tocar
+  fuera del cuadro (en la hoja), cierra el cuadro y deja un `TextItem` (`finishText`; también al cambiar de herramienta u hoja y en `onPause`). Un texto nuevo vacío no se crea; uno existente que se
+  deja vacío se borra; si no cambió nada no hay paso en el historial. Crear o editar es UN paso de deshacer/rehacer. Mientras se escribe, la ventana usa `ADJUST_PAN` para que el teclado no encoja la hoja.
+- **Selección:** con Seleccionar el texto se toca, se mueve, se gira y se redimensiona como una imagen; el menú de 3 puntos y la barra de 7 íconos aparecen. Por ahora, con un texto seleccionado, todas las
+  opciones del menú y los íconos estrella, copiar, al frente y al fondo dicen "Próximamente"; sí funcionan eliminar, pegar y seleccionar todo (que no incluye textos). Los textos no entran en la selección múltiple.
+- **Archivos tocados:** `Selectables.kt`, `Strokes.kt`, `History.kt`, `LayerRepository.kt`, `PageClipboard.kt`, `PageManagerActivity.kt`, `PageViewport.kt`, `EditorActivity.kt`, `PenOptions.kt`,
+  `Stores.kt`, `FontManager.kt` (`typefaceFor`) y el archivo nuevo `TextOptions.kt`.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

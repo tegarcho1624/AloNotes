@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Bitmap.CompressFormat
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import java.io.File
@@ -204,6 +205,136 @@ internal class ImageItem(
                 invalidate()
             }
         }.start()
+    }
+}
+
+/**
+ * Texto de una sola línea colocado en una hoja. Todo en mm de la hoja. El tamaño ([fontSize]) está en "unidades de texto":
+ * 1 unidad = [MM_PER_UNIT] mm (tamaño 40 = letra de 8 mm). [bounds] (sin rotar; su centro es el pivote del giro) es el tamaño NATURAL
+ * del texto con su fuente y estilo, salvo mientras se redimensiona: entonces el texto se dibuja ajustado al recuadro y al soltar
+ * [bakeScale] pasa el cambio de escala al tamaño de la letra. [x] e [y] son el centro del recuadro.
+ * [fontFamily] es un id de FontManager ("sys:...", "asset:...", "file:...").
+ */
+internal class TextItem(
+    override val id: String,
+    var text: String,
+    var fontSize: Float,
+    var fontFamily: String,
+    var isItalic: Boolean,
+    var isBold: Boolean,
+    var isUnderline: Boolean,
+    var color: Int,
+    override val bounds: RectF,
+    override var rotation: Float,
+    override var opacity: Float = 1f,
+    override var isLocked: Boolean = false
+) : SelectableItem {
+    companion object {
+        const val MM_PER_UNIT = 0.2f
+        const val MIN_SIZE = 8f
+        const val MAX_SIZE = 200f
+        private const val K = 50f // la medida se toma a 50x para no perder precisión con letras chicas
+
+        private val styled = HashMap<String, Typeface>()
+
+        /** La fuente con negrita e itálica aplicadas (con caché). */
+        @Synchronized
+        fun typeface(family: String, bold: Boolean, italic: Boolean): Typeface {
+            val key = "$family|$bold|$italic"
+            styled[key]?.let { return it }
+            val base = FontManager.typefaceFor(family)
+            val st = when {
+                bold && italic -> Typeface.BOLD_ITALIC
+                bold -> Typeface.BOLD
+                italic -> Typeface.ITALIC
+                else -> Typeface.NORMAL
+            }
+            val tf = if (st == Typeface.NORMAL) base else Typeface.create(base, st)
+            if (FontManager.isReady()) styled[key] = tf
+            return tf
+        }
+
+        /** Un texto nuevo cuyo punto izquierdo-centro está en (ax, ay) de la hoja. */
+        fun create(
+            id: String, text: String, size: Float, family: String, italic: Boolean, bold: Boolean, underline: Boolean,
+            color: Int, ax: Float, ay: Float
+        ): TextItem {
+            val t = TextItem(id, text, size, family, italic, bold, underline, color, RectF(), 0f)
+            t.placeLeftCenter(ax, ay)
+            return t
+        }
+    }
+
+    override var isFlippedH: Boolean = false
+    override var isFlippedV: Boolean = false
+
+    /** Centro del recuadro (mm de la hoja). */
+    var x: Float
+        get() = bounds.centerX()
+        set(v) {
+            bounds.offset(v - bounds.centerX(), 0f)
+        }
+    var y: Float
+        get() = bounds.centerY()
+        set(v) {
+            bounds.offset(0f, v - bounds.centerY())
+        }
+
+    override val scale: Float get() = bounds.width() / natural()[0]
+
+    private fun paint(sizePx: Float): Paint {
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.typeface = typeface(fontFamily, isBold, isItalic)
+        p.textSize = sizePx
+        return p
+    }
+
+    /** Tamaño natural del texto en mm: [ancho, alto, ascenso]. */
+    fun natural(): FloatArray {
+        val p = paint(fontSize * MM_PER_UNIT * K)
+        val fm = p.fontMetrics
+        return floatArrayOf(max(p.measureText(text), 1f) / K, (fm.descent - fm.ascent) / K, -fm.ascent / K)
+    }
+
+    /** Pone el recuadro en su tamaño natural alrededor de su centro actual. */
+    fun refit() {
+        val n = natural()
+        val cx = bounds.centerX()
+        val cy = bounds.centerY()
+        bounds.set(cx - n[0] / 2f, cy - n[1] / 2f, cx + n[0] / 2f, cy + n[1] / 2f)
+    }
+
+    /** Pasa la escala del recuadro (tras redimensionar) al tamaño de la letra y vuelve al tamaño natural. */
+    fun bakeScale() {
+        val k = bounds.width() / natural()[0]
+        if (abs(k - 1f) > 0.002f) fontSize = (fontSize * k).coerceIn(MIN_SIZE, MAX_SIZE)
+        refit()
+    }
+
+    /** Recuadro natural con su punto izquierdo-centro (el origen del texto, ya con el giro) en (ax, ay) de la hoja. */
+    fun placeLeftCenter(ax: Float, ay: Float) {
+        val n = natural()
+        val c = Xf.toPage(ax, ay, rotation, n[0] / 2f, 0f)
+        bounds.set(c[0] - n[0] / 2f, c[1] - n[1] / 2f, c[0] + n[0] / 2f, c[1] + n[1] / 2f)
+    }
+
+    override fun draw(c: Canvas, mmToPx: Float, invalidate: () -> Unit) {
+        if (text.isEmpty()) return
+        val n = natural()
+        val p = paint(fontSize * MM_PER_UNIT * mmToPx)
+        p.color = color
+        p.alpha = (opacity.coerceIn(0f, 1f) * 255f).roundToInt()
+        p.isUnderlineText = isUnderline
+        val cx = bounds.centerX() * mmToPx
+        val cy = bounds.centerY() * mmToPx
+        val sx = bounds.width() / n[0]
+        val sy = bounds.height() / n[1]
+        val s = c.save()
+        c.rotate(rotation, cx, cy)
+        c.translate(cx, cy)
+        c.scale(sx, sy) // 1 salvo mientras se redimensiona
+        c.drawText(text, -n[0] * mmToPx / 2f, -n[1] * mmToPx / 2f + n[2] * mmToPx, p)
+        c.restoreToCount(s)
     }
 }
 

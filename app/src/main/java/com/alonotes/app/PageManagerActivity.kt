@@ -351,6 +351,7 @@ class PageManagerActivity : Activity() {
                 val src = ImageUtil.decodeFile(im.file.path, 512) ?: continue
                 im.drawBitmap(c, k, src) // mismo dibujo que la hoja: giro, espejo y opacidad
             }
+            for (t in ly.texts) t.draw(c, k) { }
             c.restoreToCount(n)
             for (s in ly.canvas) StrokeRender.draw(c, s, k, pen)
             if (sc >= 0) c.restoreToCount(sc)

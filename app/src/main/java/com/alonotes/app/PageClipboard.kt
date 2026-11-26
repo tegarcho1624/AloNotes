@@ -23,12 +23,31 @@ internal class ClipImage(
     val lk: Boolean
 )
 
+/** Texto copiado: sus datos (no hay archivos que copiar). */
+internal class ClipText(
+    val text: String,
+    val size: Float,
+    val family: String,
+    val italic: Boolean,
+    val bold: Boolean,
+    val underline: Boolean,
+    val color: Int,
+    val l: Float,
+    val t: Float,
+    val r: Float,
+    val b: Float,
+    val rot: Float,
+    val op: Float,
+    val lk: Boolean
+)
+
 internal class ClipLayer(
     val name: String,
     val isVisible: Boolean,
     val opacity: Float,
     val strokes: List<Stroke>,
-    val images: List<ClipImage>
+    val images: List<ClipImage>,
+    val texts: List<ClipText> = emptyList()
 )
 
 /** Una hoja copiada: sus datos de página (JSON), sus capas con trazos e imágenes, y la capa seleccionada. */
@@ -75,7 +94,13 @@ internal object PageClipboard {
                     imgs.add(ClipImage(dst, b.left, b.top, b.right, b.bottom, im.rotation, im.baseW, im.isFlippedH, im.isFlippedV, im.opacity, im.linkType, im.linkData, im.isLocked))
                 }
                 val strokes = ly.canvas.map { s -> Stroke(s.type, s.color, s.widthMm, s.pts.copyOf(), s.opacity, s.locked, 0L, s.linkType, s.linkData) }
-                layers.add(ClipLayer(ly.name, ly.isVisible, ly.opacity, strokes, imgs))
+                val texts = ly.texts.map { t ->
+                    ClipText(
+                        t.text, t.fontSize, t.fontFamily, t.isItalic, t.isBold, t.isUnderline, t.color,
+                        t.bounds.left, t.bounds.top, t.bounds.right, t.bounds.bottom, t.rotation, t.opacity, t.isLocked
+                    )
+                }
+                layers.add(ClipLayer(ly.name, ly.isVisible, ly.opacity, strokes, imgs, texts))
             }
             out.add(ClipPage(js.toString(), layers, pl.selected))
         }
@@ -111,6 +136,14 @@ internal object PageClipboard {
                         continue
                     }
                     ly.items.add(ImageItem(id, dst, RectF(im.l, im.t, im.r, im.b), im.rot, im.bw, im.fh, im.fv, im.op, im.lt, im.ld, im.lk))
+                }
+                for (ct in cl.texts) {
+                    ly.texts.add(
+                        TextItem(
+                            UUID.randomUUID().toString(), ct.text, ct.size, ct.family, ct.italic, ct.bold, ct.underline, ct.color,
+                            RectF(ct.l, ct.t, ct.r, ct.b), ct.rot, ct.op, ct.lk
+                        )
+                    )
                 }
                 ls.add(ly)
             }

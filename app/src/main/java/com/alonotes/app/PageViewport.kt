@@ -12,12 +12,18 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.drawable.ColorDrawable
 import android.os.SystemClock
+import android.text.InputType
+import android.util.TypedValue
+import android.view.KeyEvent
 import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.OverScroller
@@ -30,6 +36,7 @@ import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.floor
 import java.util.IdentityHashMap
+import java.util.UUID
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
@@ -56,10 +63,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         private set
     var onPage: (() -> Unit)? = null
 
-    /** 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar, 5 formas (solo en la vista de una hoja). */
+    /** 0 ninguna, 1 lápiz, 2 borrador, 3 marca texto, 4 seleccionar, 5 formas, 6 texto (solo en la vista de una hoja). */
     var tool = 0
         set(v) {
             if (v != field) {
+                finishText() // si se estaba escribiendo un texto, se guarda antes de cambiar de herramienta
                 stopEyedropper()
                 cancelStroke()
                 endManip()
@@ -178,6 +186,18 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         }
     })
 
+    /** El editor rehace la barra: se abrió un texto existente y su estilo (tamaño, fuente...) ya está en TextStore. */
+    var onTextStyle: (() -> Unit)? = null
+
+    // Texto (herramienta 6): cuadro de edición flotante. editAx/editAy = punto izquierdo-centro del texto en la hoja (mm).
+    private var editor: EditText? = null
+    private var editItem: TextItem? = null // null = texto nuevo
+    private var editAx = 0f
+    private var editAy = 0f
+    private var editRot = 0f
+    private var editColor = 0
+    private var swallowTouch = false
+
     /** Forma de la herramienta formas (5): [ShapeGen.LINE], [ShapeGen.RECT] o [ShapeGen.CIRCLE]. La elige el editor. */
     var shape = ShapeGen.LINE
 
@@ -260,6 +280,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     }
 
     fun setPages(list: List<Spec>) {
+        finishText()
         cancelStroke()
         endManip()
         cancelCrop()
@@ -357,6 +378,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         for (ly in pl.layers) {
             out.addAll(ly.canvas)
             out.addAll(ly.items)
+            out.addAll(ly.texts)
         }
         return out
     }
@@ -372,6 +394,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             val idSet = HashSet<String>(ids)
             for (ly in pl.layers) {
                 for (im in ly.items) if (idSet.contains(im.id)) found.add(im)
+                for (t in ly.texts) if (idSet.contains(t.id)) found.add(t)
                 for (st in ly.canvas) if (idSet.contains("s" + st.uid)) found.add(StrokeItem(st))
             }
         }
@@ -403,6 +426,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Sale de los modos de recorte y suelta cualquier gesto, sin cambios (antes de deshacer o rehacer). */
     fun cancelModes() {
+        finishText()
         cancelCrop()
         clearGroupLift()
         manip = 0
@@ -430,6 +454,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     fun goToPage(i: Int) {
         if (i < 0 || i >= specs.size || i == index) return
+        finishText()
         if (continuous) {
             index = i
             scrollToIndex(i)
@@ -953,12 +978,194 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         penDown = false
     }
 
+    // ---------- Texto ----------
+
+    /** Toque con la herramienta texto: si hay un texto debajo se abre para editarlo; si no, se abre uno nuevo en ese punto. */
+    private fun textTap(e: MotionEvent) {
+        val p = toPage(e.x, e.y) ?: return
+        val sp = single?.spec ?: return
+        if (p[0] !in 0f..sp.wMm || p[1] !in 0f..sp.hMm) return
+        val pl = strokes?.page(index) ?: return
+        for (li in pl.layers.indices.reversed()) {
+            val ly = pl.layers[li]
+            if (!ly.isVisible) continue
+            for (k in ly.texts.indices.reversed()) {
+                if (ly.texts[k].hit(p[0], p[1])) {
+                    startTextEdit(ly.texts[k], p[0], p[1])
+                    return
+                }
+            }
+        }
+        if (!pl.layers[pl.selected].isVisible) {
+            Toast.makeText(context, "La capa está oculta", Toast.LENGTH_SHORT).show()
+            return
+        }
+        startTextEdit(null, p[0], p[1])
+    }
+
+    /**
+     * Abre el cuadro de escritura: transparente, en el punto tocado (el texto nuevo empieza ahí, centrado en vertical) o sobre el
+     * texto que se edita (que se oculta mientras tanto), y con el teclado. Se ve con el estilo de la barra (TextStore y el color del lápiz).
+     */
+    private fun startTextEdit(item: TextItem?, x: Float, y: Float) {
+        finishText()
+        val c = context
+        if (item != null) {
+            // Se edita con su propio estilo: la barra lo muestra y lo que se cambie en ella se aplica a este texto.
+            TextStore.setAll(c, item.fontSize, item.fontFamily, item.isItalic, item.isBold, item.isUnderline)
+            editColor = item.color
+            val b = item.bounds
+            val an = Xf.toPage(b.centerX(), b.centerY(), item.rotation, -b.width() / 2f, 0f)
+            editAx = an[0]
+            editAy = an[1]
+            editRot = item.rotation
+        } else {
+            editColor = PenStore.colors(c)[PenStore.colorIdx(c)]
+            editAx = x
+            editAy = y
+            editRot = 0f
+        }
+        editItem = item
+        single?.hiddenText = item
+        val et = EditText(c)
+        et.setText(item?.text ?: "")
+        et.setSelection(et.text.length)
+        et.background = null
+        et.setPadding(0, 0, 0, 0)
+        et.includeFontPadding = false
+        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS // una sola línea: Enter termina
+        et.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        et.setOnEditorActionListener { _, actionId, ev ->
+            val enter = ev != null && ev.keyCode == KeyEvent.KEYCODE_ENTER && ev.action == KeyEvent.ACTION_DOWN
+            if (actionId == EditorInfo.IME_ACTION_DONE || enter) {
+                finishText()
+                true
+            } else {
+                false
+            }
+        }
+        editor = et
+        addView(et, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+        layoutEditor()
+        // El teclado no debe encoger la vista (la hoja se movería): se desplaza la ventana para que se vea el cuadro.
+        (c as? android.app.Activity)?.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN)
+        et.requestFocus()
+        et.post {
+            val imm = c.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.showSoftInput(et, InputMethodManager.SHOW_IMPLICIT)
+        }
+        single?.invalidate()
+        invalidate()
+        if (item != null) onTextStyle?.invoke()
+    }
+
+    /** Coloca y da estilo al cuadro de escritura según la hoja (zoom y giro de la vista) y el estilo actual. */
+    private fun layoutEditor() {
+        val et = editor ?: return
+        val c = context
+        val p0 = pageToScreen(editAx, editAy) ?: return
+        val p1 = pageToScreen(editAx + 1f, editAy) ?: return
+        val pxMm = hypot(p1[0] - p0[0], p1[1] - p0[1])
+        val ang = Math.toDegrees(Math.atan2((p1[1] - p0[1]).toDouble(), (p1[0] - p0[0]).toDouble())).toFloat()
+        val sizePx = max(TextStore.size(c) * TextItem.MM_PER_UNIT * pxMm, 4f)
+        val tf = TextItem.typeface(TextStore.family(c), TextStore.bold(c), TextStore.italic(c))
+        val paint = Paint()
+        paint.typeface = tf
+        paint.textSize = sizePx
+        val fm = paint.fontMetrics
+        val h = fm.descent - fm.ascent
+        et.typeface = tf
+        et.setTextSize(TypedValue.COMPLEX_UNIT_PX, sizePx)
+        et.setTextColor(editColor or 0xFF000000.toInt())
+        et.paintFlags = if (TextStore.underline(c)) et.paintFlags or Paint.UNDERLINE_TEXT_FLAG
+        else et.paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
+        et.minWidth = dp(4)
+        val lp = et.layoutParams as FrameLayout.LayoutParams
+        lp.leftMargin = p0[0].roundToInt()
+        lp.topMargin = (p0[1] - h / 2f).roundToInt()
+        et.layoutParams = lp
+        et.pivotX = 0f
+        et.pivotY = h / 2f
+        et.rotation = ang + editRot
+    }
+
+    /** El editor cambió algo en la barra de texto: si hay un cuadro abierto, se ve al instante. [colorChanged]: se eligió otro color. */
+    fun textStyleChanged(colorChanged: Boolean) {
+        if (editor == null) return
+        if (colorChanged) editColor = PenStore.colors(context)[PenStore.colorIdx(context)]
+        layoutEditor()
+    }
+
+    /**
+     * Termina la escritura: cierra el teclado y el cuadro, y deja el texto en la hoja (un paso del historial). Texto nuevo y vacío:
+     * no se crea nada. Texto existente: si cambió algo se actualiza (el recuadro conserva su punto izquierdo-centro y su giro); si
+     * se dejó vacío, se borra. Si no cambió nada, no hay paso en el historial.
+     */
+    fun finishText() {
+        val et = editor ?: return
+        editor = null
+        val item = editItem
+        editItem = null
+        val txt = et.text.toString().trim()
+        val c = context
+        (c.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager).hideSoftInputFromWindow(et.windowToken, 0)
+        removeView(et)
+        (c as? android.app.Activity)?.window?.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        single?.hiddenText = null
+        val pl = strokes?.page(index)
+        if (pl != null) {
+            val size = TextStore.size(c)
+            val family = TextStore.family(c)
+            val color = editColor or 0xFF000000.toInt()
+            var changed = false
+            if (item == null) {
+                if (txt.isNotEmpty()) {
+                    val pre = pl.snapshot()
+                    val t = TextItem.create(
+                        UUID.randomUUID().toString(), txt, size, family, TextStore.italic(c), TextStore.bold(c),
+                        TextStore.underline(c), color, editAx, editAy
+                    )
+                    pl.layers[pl.selected].texts.add(t)
+                    onRecord?.invoke(pre)
+                    changed = true
+                }
+            } else if (txt.isEmpty()) {
+                val pre = pl.snapshot()
+                for (ly in pl.layers) if (ly.texts.remove(item)) break
+                onRecord?.invoke(pre)
+                changed = true
+            } else if (txt != item.text || abs(size - item.fontSize) > 0.01f || family != item.fontFamily ||
+                TextStore.italic(c) != item.isItalic || TextStore.bold(c) != item.isBold ||
+                TextStore.underline(c) != item.isUnderline || color != item.color
+            ) {
+                val pre = pl.snapshot() // el texto aún no se tocó: es el estado de antes
+                item.text = txt
+                item.fontSize = size
+                item.fontFamily = family
+                item.isItalic = TextStore.italic(c)
+                item.isBold = TextStore.bold(c)
+                item.isUnderline = TextStore.underline(c)
+                item.color = color
+                item.placeLeftCenter(editAx, editAy)
+                onRecord?.invoke(pre)
+                changed = true
+            }
+            if (changed) onItemsChanged?.invoke() // se guarda con las capas
+        }
+        single?.invalidate()
+        invalidate()
+    }
+
     // ---------- Selección y transformación ----------
 
     private fun itemExists(item: SelectableItem): Boolean {
         val pl = strokes?.page(index) ?: return false
         if (item is StrokeItem) {
             for (ly in pl.layers) if (ly.canvas.any { it === item.src }) return true
+            return false
+        }
+        if (item is TextItem) {
+            for (ly in pl.layers) for (it in ly.texts) if (it === item) return true
             return false
         }
         for (ly in pl.layers) for (it in ly.items) if (it === item) return true
@@ -1035,6 +1242,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 val st = ly.canvas[k]
                 if (StrokeOps.hit(st, xMm, yMm, 2.5f)) return StrokeItem(st)
             }
+            // Los textos van entre los trazos (encima) y las imágenes (debajo)
+            for (k in ly.texts.indices.reversed()) if (ly.texts[k].hit(xMm, yMm)) return ly.texts[k]
             for (k in ly.items.indices.reversed()) if (ly.items[k].hit(xMm, yMm)) return ly.items[k]
         }
         return null
@@ -1073,7 +1282,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 if (sel.hit(p[0], p[1])) return
             } else {
                 val pts = handlePts(sel)
-                val h = if (pts != null) hitHandle(pts, e.x, e.y) else -1
+                var h = if (pts != null) hitHandle(pts, e.x, e.y) else -1
+                // Un texto solo se redimensiona por las esquinas (conserva su proporción: cambia el tamaño de la letra).
+                if (sel is TextItem && h in 0..7 && (HX[h] == 0 || HY[h] == 0)) h = -1
                 if (h >= 0) {
                     startManip(sel, if (h == 8) M_ROTATE else M_RESIZE, h, p)
                     return
@@ -1168,6 +1379,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                     if (pre != null) onRecord?.invoke(pre)
                 }
                 manipPre = null
+                if (one) (selItem as? TextItem)?.bakeScale() // el cambio de escala pasa al tamaño de la letra
                 val st = selItem as? StrokeItem
                 if (st != null && one) {
                     commitStroke(st) // los puntos quedan transformados y se guardan con el archivo de trazos
@@ -2001,7 +2213,16 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(4), dp(4), dp(4), dp(4))
         col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
-        val acts = if (selItem is StrokeItem) {
+        val acts = if (selItem is TextItem) {
+            // Texto: por ahora todas las opciones dicen "Próximamente".
+            listOf(
+                MenuAct(Icons.LINK, "Enlace", 0f, soonAct("Enlace")),
+                MenuAct(Icons.FLIP, "Voltear horizontal", 0f, soonAct("Voltear horizontal")),
+                MenuAct(Icons.FLIP, "Voltear vertical", 90f, soonAct("Voltear vertical")),
+                MenuAct(Icons.OPACITY, "Opacidad", 0f, soonAct("Opacidad")),
+                MenuAct(Icons.LOCK, "Bloquear objeto", 0f, soonAct("Bloquear objeto"))
+            )
+        } else if (selItem is StrokeItem) {
             listOf(
                 MenuAct(Icons.LINK, "Enlace", 0f) { (selItem as? Linkable)?.let { onEditLink?.invoke(it) } },
                 MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
@@ -2286,6 +2507,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         }
         c.drawLine(pts[2], pts[3], pts[16], pts[17], ovStroke)
         for (i in 0 until 8) {
+            if (item is TextItem && (HX[i] == 0 || HY[i] == 0)) continue
             ovFill.color = ink
             c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovFill)
             c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovStroke)
@@ -2452,6 +2674,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun goTo(n: Int, forward: Boolean) {
         if (n < 0 || n >= specs.size || n == index) return
+        finishText() // antes de cambiar de hoja: el texto se guarda en la hoja donde se escribió
         index = n
         endManip()
         cancelCrop()
@@ -2470,9 +2693,21 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         if (specs.isEmpty()) return false
         if (eyeColor != null) return handleEyedropper(e) // modo gotero: los toques solo sirven para elegir un color
+        if (editor != null) {
+            // Se está escribiendo un texto: un toque fuera del cuadro lo guarda (y ese gesto no hace nada más).
+            if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+                finishText()
+                swallowTouch = true
+            }
+            if (swallowTouch) {
+                if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) swallowTouch = false
+                return true
+            }
+        }
         val stylus = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
         val toolActive = tool != 0 && !continuous && single != null
-        val drawTool = toolActive && tool != 4
+        val textTool = toolActive && tool == 6
+        val drawTool = toolActive && tool != 4 && tool != 6
         val selTool = toolActive && tool == 4
         if (stylus) lastStylusT = e.eventTime
         // Sin herramienta el stylus no mueve la vista (queda reservado para dibujar).
@@ -2532,6 +2767,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 endManip()
                 stopLinkHint()
                 if (tapLink is Linkable) onOpenLink?.invoke(tapLink)
+                // Herramienta texto: un toque corto y quieto abre un texto nuevo (espacio vacío) o el que se tocó.
+                if (textTool && !multi && e.eventTime - downTime < 500 && hypot(e.x - sx, e.y - sy) < touchSlop) textTap(e)
                 if (!multi && !toolActive) {
                     if (continuous) {
                         val b = contBounds()

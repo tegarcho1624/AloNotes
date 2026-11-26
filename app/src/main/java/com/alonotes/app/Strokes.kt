@@ -197,7 +197,9 @@ internal data class Layer(
     // Los trazos no se serializan aquí: van en strokes/<id>.bin.
     @Transient val canvas: ArrayList<Stroke> = ArrayList(),
     // Imágenes de la capa (se guardan aparte: archivos en images/<idNota>/ y sus datos en layers/<idNota>.json).
-    @Transient val items: ArrayList<ImageItem> = ArrayList()
+    @Transient val items: ArrayList<ImageItem> = ArrayList(),
+    // Textos de la capa: se dibujan encima de las imágenes y debajo de los trazos (datos en layers/<idNota>.json).
+    @Transient val texts: ArrayList<TextItem> = ArrayList()
 )
 
 /** Capas de una hoja (la primera es la de abajo) y cuál está seleccionada. Siempre hay al menos una. */
@@ -267,7 +269,8 @@ internal class PageLayers(first: List<Stroke>? = null) {
      */
     fun restore(
         saved: List<Layer>, sel: Int, counts: List<Int>,
-        images: List<List<ImageDto>> = emptyList(), imgDir: File? = null
+        images: List<List<ImageDto>> = emptyList(), imgDir: File? = null,
+        texts: List<List<TextDto>> = emptyList()
     ) {
         if (saved.isEmpty() || saved.size > MAX) return
         val flat = flatten()
@@ -278,6 +281,15 @@ internal class PageLayers(first: List<Stroke>? = null) {
             val n = if (ok) counts[i] else if (i == 0) flat.size else 0
             for (k in 0 until n) l.canvas.add(flat[pos + k])
             pos += n
+            for (dto in texts.getOrNull(i).orEmpty()) {
+                if (dto.r <= dto.l || dto.b <= dto.t) continue
+                val ti = TextItem(
+                    dto.id, dto.text, dto.size.coerceIn(TextItem.MIN_SIZE, TextItem.MAX_SIZE), dto.family, dto.italic, dto.bold,
+                    dto.underline, dto.color, RectF(dto.l, dto.t, dto.r, dto.b), dto.rot, dto.op.coerceIn(0f, 1f), dto.lk
+                )
+                ti.refit() // el recuadro vuelve al tamaño natural (por si la fuente cambió)
+                l.texts.add(ti)
+            }
             if (imgDir != null) {
                 for (dto in images.getOrNull(i).orEmpty()) {
                     if (dto.r <= dto.l || dto.b <= dto.t) continue
@@ -308,6 +320,12 @@ internal class PageLayers(first: List<Stroke>? = null) {
                         im.id, im.file, im.bounds.left, im.bounds.top, im.bounds.right, im.bounds.bottom,
                         im.rotation, im.baseW, im.isFlippedH, im.isFlippedV, im.opacity, im.linkType, im.linkData, im.isLocked
                     )
+                },
+                ly.texts.map { t ->
+                    TextSnap(
+                        t.id, t.text, t.fontSize, t.fontFamily, t.isItalic, t.isBold, t.isUnderline, t.color,
+                        t.bounds.left, t.bounds.top, t.bounds.right, t.bounds.bottom, t.rotation, t.opacity, t.isLocked
+                    )
                 }
             )
         },
@@ -327,6 +345,14 @@ internal class PageLayers(first: List<Stroke>? = null) {
                 val im = ImageItem(isn.id, isn.file, RectF(isn.l, isn.t, isn.r, isn.b), isn.rot, isn.baseW, isn.fh, isn.fv, isn.op, isn.lt, isn.ld, isn.lk)
                 im.bitmap = cache[isn.id + "|" + isn.file.path]
                 ly.items.add(im)
+            }
+            for (ts in ls.texts) {
+                ly.texts.add(
+                    TextItem(
+                        ts.id, ts.text, ts.size, ts.family, ts.italic, ts.bold, ts.underline, ts.color,
+                        RectF(ts.l, ts.t, ts.r, ts.b), ts.rot, ts.op, ts.lk
+                    )
+                )
             }
             out.add(ly)
         }
@@ -689,6 +715,9 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
      */
     var liftedSet: Set<Stroke>? = null
     var liftMatrix: Matrix? = null
+
+    /** Texto que se está editando (lo muestra el cuadro de edición): no se dibuja aquí. */
+    var hiddenText: TextItem? = null
     private var cx = 0f
     private var cy = 0f
     private var cr = -1f
@@ -744,6 +773,14 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
                     val n = c.save()
                     c.clipRect(0f, 0f, width.toFloat(), height.toFloat())
                     for (im in ly.items) im.draw(c, scale) { postInvalidate() }
+                    c.restoreToCount(n)
+                }
+                if (ly.texts.isNotEmpty()) {
+                    // Los textos van encima de las imágenes y debajo de los trazos (así el marcador se ve sobre el texto).
+                    val n = c.save()
+                    c.clipRect(0f, 0f, width.toFloat(), height.toFloat())
+                    val hid = hiddenText
+                    for (t in ly.texts) if (t !== hid) t.draw(c, scale) { postInvalidate() }
                     c.restoreToCount(n)
                 }
                 val lf = lifted

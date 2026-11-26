@@ -103,6 +103,7 @@ class EditorActivity : Activity() {
             hasSel = it
             if (::bar.isInitialized) buildBar() // los íconos de selección solo se ven si hay algo seleccionado
         }
+        viewport.onTextStyle = { if (::bar.isInitialized) buildBar() } // se abrió un texto existente: la barra muestra su estilo
         viewport.onEditLink = { showLinkMenu(it) }
         viewport.onOpenLink = { openLink(it) }
         history.onChange = { if (::bar.isInitialized) buildBar() } // activa o apaga deshacer/rehacer
@@ -195,6 +196,7 @@ class EditorActivity : Activity() {
     }
 
     override fun onPause() {
+        viewport.finishText() // un texto a medio escribir se guarda
         if (::bgLayer.isInitialized) bgLayer.pause()
         super.onPause()
     }
@@ -225,12 +227,14 @@ class EditorActivity : Activity() {
             val btn = when (t) {
                 Icons.IMAGE -> tb(t, ink) { editOnly { openGallery() } }
                 Icons.SELECT -> tb(t, ink) { pickTool(4) }
+                Icons.TEXT -> tb(t, ink) { pickTool(6) }
                 Icons.SHAPES -> tb(t, ink) { pickTool(5) }
                 Icons.STAR -> tb(t, ink) { editOnly { openStickers() } }
                 else -> tb(t, ink) { editOnly { UiKit.soon(this) } }
             }
             if (t == Icons.SELECT && tool == 4 && !cont) UiKit.ripple(this, btn, 12, ThemeUtils.accentBg(this))
             if (t == Icons.SHAPES && tool == 5 && !cont) UiKit.ripple(this, btn, 12, ThemeUtils.accentBg(this))
+            if (t == Icons.TEXT && tool == 6 && !cont) UiKit.ripple(this, btn, 12, ThemeUtils.accentBg(this))
             bar.addView(btn, UiKit.box(this, 44))
         }
         bar.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
@@ -240,6 +244,9 @@ class EditorActivity : Activity() {
             PenOptions.buildEraser(this, bar) { buildBar() }
         } else if (tool == 3 && !cont) {
             PenOptions.buildHighlighter(this, bar) { buildBar() }
+        } else if (tool == 6 && !cont) {
+            // Texto: tamaño, fuente, itálica, negrita, subrayado y color
+            TextOptions.build(this, bar, viewport) { buildBar() }
         } else if (tool == 5 && !cont) {
             // Formas: línea, cuadrado y círculo; a la derecha, los mismos grosores y colores del lápiz
             PenOptions.buildShapes(this, bar, viewport.shape, { viewport.shape = it }) { buildBar() }
@@ -471,6 +478,12 @@ class EditorActivity : Activity() {
             toast("Termina o cancela el recorte primero")
             return
         }
+        // Con un texto seleccionado solo funciona eliminar (y pegar / seleccionar todo, que no dependen de él): lo demás, próximamente.
+        val textSel = viewport.currentSelection().any { it is TextItem }
+        if (textSel && (a == SelAct.STICKER || a == SelAct.COPY || a == SelAct.FRONT || a == SelAct.BACK)) {
+            UiKit.soon(this)
+            return
+        }
         when (a) {
             SelAct.ALL -> if (viewport.selectAll() == 0) toast("No hay objetos en esta capa")
             SelAct.STICKER -> saveAsSticker()
@@ -576,7 +589,8 @@ class EditorActivity : Activity() {
     private fun deleteSelection() {
         val sel = selectedImages()
         val selStrokes = selectedStrokes()
-        if (sel.isEmpty() && selStrokes.isEmpty()) {
+        val selTexts = viewport.currentSelection().filterIsInstance<TextItem>()
+        if (sel.isEmpty() && selStrokes.isEmpty() && selTexts.isEmpty()) {
             toast("Selecciona uno o varios objetos")
             return
         }
@@ -584,16 +598,18 @@ class EditorActivity : Activity() {
         val pre = pl.snapshot()
         val set = HashSet<ImageItem>(sel)
         val strokeSet = HashSet<Stroke>(selStrokes)
+        val textSet = HashSet<TextItem>(selTexts)
         for (ly in pl.layers) {
             ly.items.removeAll(set)
             if (strokeSet.isNotEmpty()) ly.canvas.removeAll(strokeSet)
+            if (textSet.isNotEmpty()) ly.texts.removeAll(textSet)
         }
         history.record(pre)
         viewport.setSelection(emptyList())
         viewport.refreshPage()
         if (strokeSet.isNotEmpty()) persistStrokes()
         persistLayers() // también cambia cuántos trazos tiene cada capa
-        val n = sel.size + selStrokes.size
+        val n = sel.size + selStrokes.size + selTexts.size
         toast(if (n == 1) "1 objeto eliminado" else n.toString() + " objetos eliminados")
     }
 

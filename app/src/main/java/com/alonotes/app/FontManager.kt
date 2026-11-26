@@ -16,6 +16,10 @@ internal object FontManager {
     class Opt(val id: String, val label: String, val tf: Typeface)
 
     private val cache = HashMap<String, Typeface>()
+
+    // Contexto de la aplicación (se guarda al resolver cualquier fuente): lo usan los textos de las hojas, que se dibujan sin contexto.
+    @Volatile
+    private var appCtx: Context? = null
     private val SYSTEM = listOf(
         "sys:sans-serif" to "Sans Serif",
         "sys:serif" to "Serif",
@@ -37,7 +41,9 @@ internal object FontManager {
     private fun fileNames(c: Context): List<String> =
         (dir(c).listFiles() ?: emptyArray()).map { it.name }.filter { isFont(it) }.sorted()
 
+    @Synchronized
     private fun resolve(c: Context, id: String): Typeface? {
+        appCtx = c.applicationContext
         cache[id]?.let { return it }
         val tf: Typeface? = try {
             when {
@@ -63,6 +69,15 @@ internal object FontManager {
     }
 
     fun current(c: Context): Typeface = resolve(c, selectedId(c)) ?: Typeface.DEFAULT
+
+    /** ¿Ya hay contexto para resolver fuentes? (antes, [typefaceFor] devuelve la predeterminada y no conviene guardarla en caché) */
+    fun isReady(): Boolean = appCtx != null
+
+    /** La fuente con ese id ("sys:...", "asset:...", "file:..."), sin contexto: si falta o no hay contexto aún, la de la app o la predeterminada. */
+    fun typefaceFor(id: String): Typeface {
+        val c = appCtx ?: return Typeface.DEFAULT
+        return resolve(c, id) ?: current(c)
+    }
 
     fun list(c: Context): List<Opt> {
         val out = ArrayList<Opt>()

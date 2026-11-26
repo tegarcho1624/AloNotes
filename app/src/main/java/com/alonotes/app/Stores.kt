@@ -251,3 +251,42 @@ internal object PenStore {
         sp(c).edit().putString("saved", csv(l.take(MAX_SAVED))).apply()
     }
 }
+
+/**
+ * Estilo con el que se escribe el texto nuevo (SharedPreferences "text"): size (unidades de texto, ver TextItem.MM_PER_UNIT), family
+ * (id de FontManager; vacío = la fuente de la app), italic, bold, underline. El color es el del lápiz (PenStore). Valor corrupto => por defecto.
+ */
+internal object TextStore {
+    const val DEFAULT_SIZE = 40f
+
+    private fun sp(c: Context) = c.getSharedPreferences("text", Context.MODE_PRIVATE)
+
+    fun size(c: Context): Float = sp(c).getFloat("size", DEFAULT_SIZE).coerceIn(TextItem.MIN_SIZE, TextItem.MAX_SIZE)
+    fun setSize(c: Context, v: Float) = sp(c).edit().putFloat("size", v.coerceIn(TextItem.MIN_SIZE, TextItem.MAX_SIZE)).apply()
+
+    fun family(c: Context): String {
+        val v = sp(c).getString("family", "") ?: ""
+        return if (v.isEmpty()) FontManager.selectedId(c) else v
+    }
+    fun setFamily(c: Context, id: String) = sp(c).edit().putString("family", id).apply()
+
+    fun italic(c: Context): Boolean = sp(c).getBoolean("italic", false)
+    fun setItalic(c: Context, v: Boolean) = sp(c).edit().putBoolean("italic", v).apply()
+
+    fun bold(c: Context): Boolean = sp(c).getBoolean("bold", false)
+    fun setBold(c: Context, v: Boolean) = sp(c).edit().putBoolean("bold", v).apply()
+
+    fun underline(c: Context): Boolean = sp(c).getBoolean("underline", false)
+    fun setUnderline(c: Context, v: Boolean) = sp(c).edit().putBoolean("underline", v).apply()
+
+    /** Carga el estilo de un texto existente (al editarlo): la barra y el teclado muestran el suyo. */
+    fun setAll(c: Context, size: Float, family: String, italic: Boolean, bold: Boolean, underline: Boolean) {
+        sp(c).edit()
+            .putFloat("size", size.coerceIn(TextItem.MIN_SIZE, TextItem.MAX_SIZE))
+            .putString("family", family)
+            .putBoolean("italic", italic)
+            .putBoolean("bold", bold)
+            .putBoolean("underline", underline)
+            .apply()
+    }
+}

@@ -13,7 +13,29 @@ internal class PageState(
     val layers: List<Layer> = emptyList(),
     val counts: List<Int> = emptyList(),
     /** Imágenes de cada capa (misma posición que [layers]). */
-    val images: List<List<ImageDto>> = emptyList()
+    val images: List<List<ImageDto>> = emptyList(),
+    /** Textos de cada capa (misma posición que [layers]); los archivos viejos no lo traen. */
+    val texts: List<List<TextDto>> = emptyList()
+)
+
+/** Texto guardado: contenido, estilo (fuente = id de FontManager) y recuadro sin rotar en mm de la hoja con su rotación. */
+@Serializable
+internal class TextDto(
+    val id: String,
+    val text: String,
+    val size: Float = 40f,
+    val family: String = "",
+    val italic: Boolean = false,
+    val bold: Boolean = false,
+    val underline: Boolean = false,
+    val color: Int = 0xFF000000.toInt(),
+    val l: Float,
+    val t: Float,
+    val r: Float,
+    val b: Float,
+    val rot: Float = 0f,
+    val op: Float = 1f,
+    val lk: Boolean = false
 )
 
 /** Imagen guardada: archivo (en images/<idNota>/), rectángulo sin rotar en mm de la hoja, rotación y ancho original. */
@@ -82,9 +104,10 @@ internal object LayerRepository {
 
     /** Aplica lo guardado a las hojas ya cargadas (llamar justo después de StrokeStore.load). */
     fun applyTo(c: Context, id: String, doc: DocStrokes) {
+        FontManager.current(c) // los textos miden con su fuente al cargarse: FontManager necesita ya su contexto
         for ((i, ps) in loadLayers(c, id).withIndex()) {
             if (i >= 5000) break
-            doc.page(i).restore(ps.layers, ps.selected, ps.counts, ps.images, File(c.filesDir, "images/" + id))
+            doc.page(i).restore(ps.layers, ps.selected, ps.counts, ps.images, File(c.filesDir, "images/" + id), ps.texts)
         }
     }
 
@@ -98,6 +121,12 @@ internal object LayerRepository {
                         ly.items.map { ImageDto(
                             it.id, it.file.name, it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom,
                             it.rotation, it.baseW, it.isFlippedH, it.isFlippedV, it.opacity, it.linkType, it.linkData, it.isLocked
+                        ) }
+                    },
+                    pl.layers.map { ly ->
+                        ly.texts.map { TextDto(
+                            it.id, it.text, it.fontSize, it.fontFamily, it.isItalic, it.isBold, it.isUnderline, it.color,
+                            it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom, it.rotation, it.opacity, it.isLocked
                         ) }
                     }
                 )

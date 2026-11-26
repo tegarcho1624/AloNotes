@@ -75,6 +75,14 @@ internal object PenOptions {
         colorGroup(a, bar, colors, sel, { i -> PenStore.setColorIdx(a, i) }, { i, c -> PenStore.setColor(a, i, c) }, rebuild)
     }
 
+    /** Solo los cuatro colores del lápiz (los usa la barra de texto). [rebuild] se llama después de elegir o cambiar un color. */
+    fun colorsOnly(a: Activity, bar: LinearLayout, rebuild: () -> Unit) {
+        colorGroup(
+            a, bar, PenStore.colors(a), PenStore.colorIdx(a),
+            { i -> PenStore.setColorIdx(a, i) }, { i, c -> PenStore.setColor(a, i, c) }, rebuild
+        )
+    }
+
     /** Barra de las formas: línea, cuadrado y círculo (la elegida resaltada); a la derecha, los mismos grosores y colores del lápiz. */
     fun buildShapes(a: Activity, bar: LinearLayout, sel: Int, onSelect: (Int) -> Unit, rebuild: () -> Unit) {
         val hi = ThemeUtils.accentHi(a)
@@ -171,7 +179,7 @@ internal object PenOptions {
         }
     }
 
-    private fun divider(a: Activity): View {
+    fun divider(a: Activity): View {
         val d = View(a)
         d.setBackgroundColor(a.getColor(R.color.ln2))
         val lp = LinearLayout.LayoutParams(UiKit.dp(a, 1), UiKit.dp(a, 24))
