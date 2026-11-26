@@ -321,6 +321,21 @@ el ícono del launcher (color fijo).
   (`keepGroupInPage`). Con más de 40 objetos solo se dibuja el contorno del grupo. `refreshPage` y `reselect` usan conjuntos (no buscan trazo por trazo).
 - Todo (mover, voltear, opacidad, bloquear, copiar/pegar, orden, eliminar) es un paso del historial y guarda con el archivo de trazos (`onChanged`) y las capas.
 
+## Menú de 3 puntos de los trazos: enlace, color y grosor (v0.24.0)
+- Solo cambia el menú de los TRAZOS (el de las imágenes queda igual). Orden: Enlace, Voltear horizontal, Voltear vertical, Opacidad, **Color**, **Grosor**, Bloquear. Ya no tiene
+  Recortar ni Recorte libre. Íconos nuevos en `Icons.kt`: `COLOR_WHEEL` (círculo cromático) y `THICKNESS` (cuatro líneas de grosor creciente).
+- **Enlace:** `Linkable` (`Selectables.kt`) es la interfaz común (`linkType`, `linkData`) de `ImageItem` y `StrokeItem`; los tipos siguen siendo `ImageItem.LINK_*`. `Stroke` también guarda
+  `linkType`/`linkData`. Es el mismo diálogo de las imágenes (título "Enlace del trazo"), con las mismas funciones del editor (`showLinkMenu`, `setLink`, `openLink`...). En modo dibujo
+  (lápiz, marcador) un toque corto y quieto sobre un trazo con enlace lo abre (se descarta el punto que se iba a dibujar) y, si se mantiene, se ve la cadena en su esquina. Para trazos
+  la tolerancia del toque es de 2 mm (para seleccionar son 2,5 mm), así un punto escrito cerca no abre el enlace. Los trazos van encima de las imágenes de su capa también para esto.
+- **Color:** abre el MISMO selector de color del dibujo (`ColorPicker.show`: círculo cromático, HEX, guardados, gotero). Cada color elegido reemplaza el trazo de la capa al instante
+  (`Stroke.copyWith(color = ...)`, sin recalcular el camino); al cerrar el selector se guarda y es UN paso del historial (solo si el color cambió).
+- **Grosor:** submenú Chico / Mediano / Grueso con los mismos tres grosores de la barra de dibujo (marcador `hlWidthMm`: 2,5 / 5 / 9 mm; lápiz, pluma y pincel `widthMm`: 0,35 / 0,8 / 1,8 mm).
+  Se marca el actual si coincide con uno. Cambia el trazo al instante, se guarda y es un paso del historial.
+- **Archivo de trazos:** sigue siendo `ALN2`. Las banderas por trazo usan el bit 1 (valor 2) = "tiene enlace"; entonces, tras el byte de opacidad, van un byte de tipo y el texto (`writeUTF`;
+  enlaces de más de 16000 caracteres no se guardan). Los `ALN2` de la versión anterior (sin bit 1) se leen igual. Color y grosor ya se guardaban en `ALN1` y `ALN2`. Se escribe `ALN2` solo si
+  algún trazo tiene opacidad, bloqueo o enlace. Copiar/pegar (objetos y hojas), el borrador (cada trozo conserva el enlace) y mover/girar/voltear conservan el enlace.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

@@ -27,7 +27,9 @@ internal class ClipStroke(
     val color: Int,
     val widthMm: Float,
     val pts: FloatArray,
-    val opacity: Float
+    val opacity: Float,
+    val linkType: Int,
+    val linkData: String
 )
 
 /** Lo que crea un pegado: las imágenes y los trazos nuevos (para ponerlos en la capa). */
@@ -96,7 +98,7 @@ internal object ObjectClipboard {
                     rel[k + 2] = sp[k + 2]
                     k += 3
                 }
-                outStrokes.add(ClipStroke(it.src.type, it.src.color, it.src.widthMm, rel, it.src.opacity))
+                outStrokes.add(ClipStroke(it.src.type, it.src.color, it.src.widthMm, rel, it.src.opacity, it.src.linkType, it.src.linkData))
             }
         }
         for (im in items.filterIsInstance<ImageItem>()) {
@@ -185,7 +187,7 @@ internal object ObjectClipboard {
                 pts[k + 2] = so.pts[k + 2]
                 k += 3
             }
-            outStrokes.add(Stroke(so.type, so.color, so.widthMm, pts, so.opacity, false))
+            outStrokes.add(Stroke(so.type, so.color, so.widthMm, pts, so.opacity, false, 0L, so.linkType, so.linkData))
         }
         if (out.isNotEmpty() || outStrokes.isNotEmpty()) pastes++
         return Pasted(out, outStrokes)

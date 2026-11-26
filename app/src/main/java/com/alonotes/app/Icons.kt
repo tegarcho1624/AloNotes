@@ -75,6 +75,8 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val PASTE = 58
         const val BRING_FRONT = 59
         const val SEND_BACK = 60
+        const val COLOR_WHEEL = 61
+        const val THICKNESS = 62
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -422,6 +424,28 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
             DOTS_V -> {
                 p.style = Paint.Style.FILL
                 circ(c, 12, 5, 1.8f); circ(c, 12, 12, 1.8f); circ(c, 12, 19, 1.8f)
+            }
+            COLOR_WHEEL -> {
+                // Círculo cromático: el aro, un centro y seis rayos (los sectores de color)
+                circ(c, 12, 12, 9)
+                circ(c, 12, 12, 2.6f)
+                for (i in 0 until 6) {
+                    val a = Math.toRadians(60.0 * i + 30.0)
+                    val cs = cos(a).toFloat()
+                    val sn = sin(a).toFloat()
+                    ln(c, 12 + 2.6f * cs, 12 + 2.6f * sn, 12 + 9f * cs, 12 + 9f * sn)
+                }
+            }
+            THICKNESS -> {
+                // Cuatro líneas de grosor creciente
+                p.strokeWidth = 1f
+                ln(c, 4, 4.5f, 20, 4.5f)
+                p.strokeWidth = 2f
+                ln(c, 4, 9.5f, 20, 9.5f)
+                p.strokeWidth = 3.4f
+                ln(c, 4, 15, 20, 15)
+                p.strokeWidth = 5f
+                ln(c, 4, 20.5f, 20, 20.5f)
             }
             else -> {}
         }

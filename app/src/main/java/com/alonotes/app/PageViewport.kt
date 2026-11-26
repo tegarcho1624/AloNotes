@@ -76,15 +76,15 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     var strokes: DocStrokes? = null
     var onChanged: ((Int) -> Unit)? = null
 
-    /** Pide al editor mostrar el menú de enlace de la imagen seleccionada. */
-    var onEditLink: ((ImageItem) -> Unit)? = null
+    /** Pide al editor mostrar el menú de enlace de la imagen o el trazo seleccionado. */
+    var onEditLink: ((Linkable) -> Unit)? = null
 
-    /** Se tocó una imagen con enlace (herramienta lápiz, marcador o ninguna): el editor lo abre. */
-    var onOpenLink: ((ImageItem) -> Unit)? = null
+    /** Se tocó una imagen o un trazo con enlace (herramienta lápiz, marcador o ninguna): el editor lo abre. */
+    var onOpenLink: ((Linkable) -> Unit)? = null
 
     private var downTime = 0L
-    private var linkCand: ImageItem? = null // imagen con enlace bajo el dedo
-    private var linkHint: ImageItem? = null // ... ya mantenida un momento: se muestra el ícono de cadena
+    private var linkCand: SelectableItem? = null // imagen o trazo con enlace bajo el dedo
+    private var linkHint: SelectableItem? = null // ... ya mantenido un momento: se muestra el ícono de cadena
     private val linkHintRun = Runnable {
         linkHint = linkCand
         invalidate()
@@ -827,15 +827,23 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         penDown = false
     }
 
-    // ---------- Enlaces de imagen ----------
+    // ---------- Enlaces de imagen y de trazo ----------
 
-    /** Imagen con enlace bajo el punto tocado (capas visibles, de arriba abajo), o null. Las imágenes sin enlace no cuentan. */
-    private fun linkAt(e: MotionEvent): ImageItem? {
+    /**
+     * Imagen o trazo con enlace bajo el punto tocado (capas visibles, de arriba abajo; en cada capa los trazos van encima de las
+     * imágenes), o null. Lo que no tiene enlace no cuenta. Para un trazo se usa una tolerancia menor que al seleccionar (2 mm),
+     * así un punto escrito cerca de un trazo con enlace no lo abre.
+     */
+    private fun linkAt(e: MotionEvent): SelectableItem? {
         val p = toPage(e.x, e.y) ?: return null
         val pl = strokes?.page(index) ?: return null
         for (li in pl.layers.indices.reversed()) {
             val ly = pl.layers[li]
             if (!ly.isVisible) continue
+            for (k in ly.canvas.indices.reversed()) {
+                val st = ly.canvas[k]
+                if (st.linkType != ImageItem.LINK_NONE && StrokeOps.hit(st, p[0], p[1], 2f)) return StrokeItem(st)
+            }
             for (k in ly.items.indices.reversed()) {
                 val im = ly.items[k]
                 if (im.linkType != ImageItem.LINK_NONE && im.hit(p[0], p[1])) return im
@@ -1265,7 +1273,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 out[j + 2] = p[j + 2]
                 j += 3
             }
-            val ns = Stroke(s0.type, s0.color, s0.widthMm * k, out, s0.opacity, s0.locked, s0.uid)
+            val ns = Stroke(s0.type, s0.color, s0.widthMm * k, out, s0.opacity, s0.locked, s0.uid, s0.linkType, s0.linkData)
             repl[s0] = ns
             multiSel[i] = StrokeItem(ns)
         }
@@ -1863,7 +1871,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private var menu: PopupWindow? = null
     private var menuClosedAt = 0L
 
-    private class MenuAct(val icon: Int, val name: String, val rot: Float, val imgOnly: Boolean, val run: () -> Unit)
+    private class MenuAct(val icon: Int, val name: String, val rot: Float, val run: () -> Unit)
 
     private fun dismissMenu() {
         menu?.dismiss()
@@ -1939,9 +1947,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     }
 
     /**
-     * Siete botones en columna, de arriba abajo: enlace, recortar, recorte libre, voltear horizontal, voltear vertical
-     * (el mismo ícono girado 90°), opacidad y bloquear. Con una imagen todo funciona; con un trazo funcionan voltear, opacidad y
-     * bloquear, y enlace y recortes avisan "Próximamente".
+     * Menú vertical de los 3 puntos. Con una imagen, siete botones (enlace, recortar, recorte libre, voltear horizontal, voltear
+     * vertical -el mismo ícono girado 90°-, opacidad y bloquear). Con un trazo, siete botones distintos: enlace, voltear
+     * horizontal, voltear vertical, opacidad, color (círculo cromático), grosor (chico, mediano, grueso) y bloquear; sin recortes.
      */
     private fun showMenu(anchor: View) {
         val ctx = context
@@ -1950,26 +1958,120 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         col.orientation = LinearLayout.VERTICAL
         col.setPadding(dp(4), dp(4), dp(4), dp(4))
         col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
-        val isImg = selItem is ImageItem // enlace y recortes son de imágenes: con un trazo dicen "Próximamente"; el resto vale para ambos
-        val acts = listOf(
-            MenuAct(Icons.LINK, "Enlace", 0f, true) { (selItem as? ImageItem)?.let { onEditLink?.invoke(it) } },
-            MenuAct(Icons.CROP, "Recortar", 0f, true) { enterCrop() },
-            MenuAct(Icons.CUT, "Recorte libre", 0f, true) { enterLasso() },
-            MenuAct(Icons.FLIP, "Voltear horizontal", 0f, false) { flipSelected(true) },
-            MenuAct(Icons.FLIP, "Voltear vertical", 90f, false) { flipSelected(false) },
-            MenuAct(Icons.OPACITY, "Opacidad", 0f, false) { showOpacity(anchor) },
-            MenuAct(Icons.LOCK, "Bloquear objeto", 0f, false) { setLocked(true) }
-        )
+        val acts = if (selItem is StrokeItem) {
+            listOf(
+                MenuAct(Icons.LINK, "Enlace", 0f) { (selItem as? Linkable)?.let { onEditLink?.invoke(it) } },
+                MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
+                MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
+                MenuAct(Icons.OPACITY, "Opacidad", 0f) { showOpacity(anchor) },
+                MenuAct(Icons.COLOR_WHEEL, "Color", 0f) { showStrokeColor(anchor) },
+                MenuAct(Icons.THICKNESS, "Grosor", 0f) { showStrokeWidth(anchor) },
+                MenuAct(Icons.LOCK, "Bloquear objeto", 0f) { setLocked(true) }
+            )
+        } else {
+            listOf(
+                MenuAct(Icons.LINK, "Enlace", 0f) { (selItem as? ImageItem)?.let { onEditLink?.invoke(it) } },
+                MenuAct(Icons.CROP, "Recortar", 0f) { enterCrop() },
+                MenuAct(Icons.CUT, "Recorte libre", 0f) { enterLasso() },
+                MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
+                MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
+                MenuAct(Icons.OPACITY, "Opacidad", 0f) { showOpacity(anchor) },
+                MenuAct(Icons.LOCK, "Bloquear objeto", 0f) { setLocked(true) }
+            )
+        }
         for (a in acts) {
             val btn = UiKit.iconBtn(ctx, a.icon, ink, 44, 22) {
                 dismissMenu()
-                if (isImg || !a.imgOnly) a.run() else Toast.makeText(ctx, a.name + ": Próximamente", Toast.LENGTH_SHORT).show()
+                a.run()
             }
             btn.rotation = a.rot
             col.addView(btn, LinearLayout.LayoutParams(dp(44), dp(44)))
         }
         val pw = makePopup(col) {}
         placeBeside(pw, anchor, col.measuredWidth, col.measuredHeight)
+    }
+
+    /**
+     * Color del trazo seleccionado: el MISMO selector de color que se usa para dibujar (círculo cromático, HEX, guardados, gotero).
+     * Cada color que se elige reemplaza el trazo de la capa al instante; al cerrar el selector se guarda y cuenta como un solo
+     * paso del historial (si el color cambió).
+     */
+    private fun showStrokeColor(anchor: View) {
+        val item = selItem as? StrokeItem ?: return
+        val act = context as? android.app.Activity ?: return
+        val pre = snapNow() // la hoja antes de tocar el color
+        val startColor = item.src.color
+        ColorPicker.show(act, anchor, startColor, { c ->
+            replaceStroke(item, item.src.copyWith(color = c or 0xFF000000.toInt()))
+            single?.invalidate()
+            invalidate()
+        }, {
+            if (item.src.color != startColor) {
+                onChanged?.invoke(index)
+                if (pre != null) onRecord?.invoke(pre)
+            }
+        })
+    }
+
+    /**
+     * Grosor del trazo seleccionado: submenú con Chico, Mediano y Grueso. Son los mismos tres grosores de la barra de dibujo
+     * (marcador: 2,5 / 5 / 9 mm; lápiz, pluma y pincel: 0,35 / 0,8 / 1,8 mm). El actual se marca si coincide con uno.
+     */
+    private fun showStrokeWidth(anchor: View) {
+        val item = selItem as? StrokeItem ?: return
+        val ctx = context
+        val ink = ctx.getColor(R.color.ink)
+        val marker = item.src.type == 3
+        val presets = FloatArray(3) { i -> if (marker) PenStore.hlWidthMm(i) else PenStore.widthMm(i) }
+        val names = arrayOf("Chico", "Mediano", "Grueso")
+        val thick = intArrayOf(2, 5, 9)
+        val base = item.src.color
+        val lineCol = if (androidx.core.graphics.ColorUtils.calculateLuminance(base) < 0.12) 0xFFBDBDBD.toInt() else base
+        val col = LinearLayout(ctx)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(4), dp(4), dp(4), dp(4))
+        col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
+        for (i in 0..2) {
+            val row = LinearLayout(ctx)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(dp(12), 0, dp(12), 0)
+            val line = View(ctx)
+            line.background = UiKit.rect(ctx, lineCol, 6)
+            val lp = LinearLayout.LayoutParams(dp(26), dp(thick[i]))
+            lp.rightMargin = dp(12)
+            row.addView(line, lp)
+            row.addView(UiKit.text(ctx, names[i], 15, ink))
+            UiKit.ripple(ctx, row, 12, if (abs(item.src.widthMm - presets[i]) < 0.05f) ThemeUtils.accentBg(ctx) else 0)
+            row.setOnClickListener {
+                dismissMenu()
+                applyStrokeWidth(item, presets[i])
+            }
+            col.addView(row, LinearLayout.LayoutParams(dp(150), dp(44)))
+        }
+        val pw = makePopup(col) {}
+        placeBeside(pw, anchor, col.measuredWidth, col.measuredHeight)
+    }
+
+    /** Cambia el grosor del trazo (un paso del historial) y lo guarda con el archivo de trazos. */
+    private fun applyStrokeWidth(item: StrokeItem, mm: Float) {
+        if (abs(item.src.widthMm - mm) < 0.001f) return
+        val pre = snapNow()
+        replaceStroke(item, item.src.copyWith(widthMm = mm))
+        single?.invalidate()
+        invalidate()
+        onChanged?.invoke(index)
+        if (pre != null) onRecord?.invoke(pre)
+    }
+
+    /**
+     * Cambia el enlace de un trazo: el trazo con el enlace nuevo ocupa su lugar en la capa. El editor registra el paso del historial
+     * y guarda (igual que con las imágenes).
+     */
+    fun setStrokeLink(item: StrokeItem, type: Int, data: String) {
+        replaceStroke(item, item.src.copyWith(linkType = type, linkData = data))
+        single?.invalidate()
+        invalidate()
     }
 
     /**
@@ -2386,7 +2488,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 if (penDown && tapLink != null) discardStroke() else if (penDown) endStroke(e)
                 endManip()
                 stopLinkHint()
-                if (tapLink != null) onOpenLink?.invoke(tapLink)
+                if (tapLink is Linkable) onOpenLink?.invoke(tapLink)
                 if (!multi && !toolActive) {
                     if (continuous) {
                         val b = contBounds()

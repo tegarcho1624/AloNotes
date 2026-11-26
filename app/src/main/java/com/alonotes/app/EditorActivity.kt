@@ -597,7 +597,7 @@ class EditorActivity : Activity() {
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
 
     /** Texto de a dónde apunta el enlace de la imagen (para mostrarlo en el menú). */
-    private fun linkLabel(item: ImageItem): String {
+    private fun linkLabel(item: Linkable): String {
         if (item.linkType == ImageItem.LINK_WEB) return item.linkData
         val k = item.linkData.lastIndexOf('|')
         if (k <= 0) return "?"
@@ -607,10 +607,10 @@ class EditorActivity : Activity() {
     }
 
     /** Menú de enlace: Enlace Web, Enlace Interno y (si ya tiene) Quitar enlace. */
-    private fun showLinkMenu(item: ImageItem) {
+    private fun showLinkMenu(item: Linkable) {
         val ink = getColor(R.color.ink)
         val l = UiKit.vbox(this, 12)
-        val t = UiKit.text(this, "Enlace de la imagen", 17, ink)
+        val t = UiKit.text(this, if (item is StrokeItem) "Enlace del trazo" else "Enlace de la imagen", 17, ink)
         t.setPadding(dp(14), dp(8), dp(14), dp(4))
         l.addView(t)
         if (item.linkType != ImageItem.LINK_NONE) {
@@ -631,12 +631,18 @@ class EditorActivity : Activity() {
         ref.d = UiKit.show(this, l, true)
     }
 
-    /** Guarda el enlace en la imagen (un paso del historial) y en las capas. */
-    private fun setLink(item: ImageItem, type: Int, data: String) {
+    /** Guarda el enlace en la imagen o el trazo (un paso del historial), en las capas y, si es un trazo, en el archivo de trazos. */
+    private fun setLink(item: Linkable, type: Int, data: String) {
         if (total == 0) return
         val pre = strokes.page(viewport.index).snapshot()
-        item.linkType = type
-        item.linkData = data
+        if (item is StrokeItem) {
+            // Un trazo no guarda el enlace en las capas: el trazo con el enlace nuevo reemplaza al anterior y va en el archivo de trazos.
+            viewport.setStrokeLink(item, type, data)
+            persistStrokes()
+        } else {
+            item.linkType = type
+            item.linkData = data
+        }
         history.record(pre)
         persistLayers()
         viewport.refreshPage()
@@ -658,7 +664,7 @@ class EditorActivity : Activity() {
         return s
     }
 
-    private fun askWebLink(item: ImageItem) {
+    private fun askWebLink(item: Linkable) {
         val start = if (item.linkType == ImageItem.LINK_WEB) item.linkData else "https://"
         UiKit.askName(this, "Enlace web", start) { raw ->
             val url = normalizeUrl(raw)
@@ -667,7 +673,7 @@ class EditorActivity : Activity() {
     }
 
     /** Selector de destino: primero las hojas de esta nota y luego las otras notas (de una nota con varias hojas se elige la hoja). */
-    private fun pickInternalLink(item: ImageItem) {
+    private fun pickInternalLink(item: Linkable) {
         val here = ArrayList<Pair<String, () -> Unit>>()
         for (i in 0 until total) {
             here.add(Pair("Page " + (i + 1), { setLink(item, ImageItem.LINK_INTERNAL, "$docId|$i") }))
@@ -680,7 +686,7 @@ class EditorActivity : Activity() {
         showPicker("Enlace interno", listOf(Pair("Esta nota", here), Pair("Otras notas", others)))
     }
 
-    private fun pickPageOf(item: ImageItem, n: NoteStore.Item) {
+    private fun pickPageOf(item: Linkable, n: NoteStore.Item) {
         val count = n.pages.length()
         if (count <= 1) {
             setLink(item, ImageItem.LINK_INTERNAL, n.id + "|0")
@@ -725,8 +731,8 @@ class EditorActivity : Activity() {
         ref.d = UiKit.show(this, box, true)
     }
 
-    /** Abre el enlace de una imagen tocada: web en el navegador; interno, la hoja o la nota de destino. */
-    private fun openLink(item: ImageItem) {
+    /** Abre el enlace de una imagen o un trazo tocado: web en el navegador; interno, la hoja o la nota de destino. */
+    private fun openLink(item: Linkable) {
         when (item.linkType) {
             ImageItem.LINK_WEB -> {
                 val url = normalizeUrl(item.linkData)

@@ -54,7 +54,10 @@ internal class Stroke(
     val opacity: Float = 1f,
     /** Bloqueado: no se puede mover, girar ni redimensionar. Se guarda en el archivo de trazos. */
     val locked: Boolean = false,
-    uidFrom: Long = 0L
+    uidFrom: Long = 0L,
+    /** Enlace del trazo, igual que el de las imágenes: [ImageItem.LINK_NONE], LINK_WEB (linkData = URL) o LINK_INTERNAL ("idNota|hoja"). Se guarda en el archivo de trazos. */
+    val linkType: Int = 0,
+    val linkData: String = ""
 ) {
     val n: Int get() = pts.size / 3
     var cache: Path? = null
@@ -89,11 +92,23 @@ internal class Stroke(
         return r
     }
 
-    /** El mismo trazo con otra opacidad o bloqueo. Comparte los puntos y el camino ya calculado (no se vuelve a construir). */
-    fun copyWith(opacity: Float = this.opacity, locked: Boolean = this.locked): Stroke {
-        val s = Stroke(type, color, widthMm, pts, opacity, locked, uid)
-        s.cache = cache
-        s.cacheScale = cacheScale
+    /**
+     * El mismo trazo con otra opacidad, bloqueo, color, grosor o enlace (conserva el identificador). Comparte los puntos y, si el grosor
+     * no cambia, el camino ya calculado (no se vuelve a construir).
+     */
+    fun copyWith(
+        opacity: Float = this.opacity,
+        locked: Boolean = this.locked,
+        color: Int = this.color,
+        widthMm: Float = this.widthMm,
+        linkType: Int = this.linkType,
+        linkData: String = this.linkData
+    ): Stroke {
+        val s = Stroke(type, color, widthMm, pts, opacity, locked, uid, linkType, linkData)
+        if (widthMm == this.widthMm) {
+            s.cache = cache
+            s.cacheScale = cacheScale
+        }
         s.bb = bb
         return s
     }
@@ -439,7 +454,7 @@ internal object StrokeOps {
                 val dx = s.pts[i * 3] - x
                 val dy = s.pts[i * 3 + 1] - y
                 if (dx * dx + dy * dy <= r2) {
-                    if (run.size >= 6) out.add(Stroke(s.type, s.color, s.widthMm, run.toArray(), s.opacity, s.locked))
+                    if (run.size >= 6) out.add(Stroke(s.type, s.color, s.widthMm, run.toArray(), s.opacity, s.locked, 0L, s.linkType, s.linkData))
                     run = FloatList()
                 } else {
                     run.add(s.pts[i * 3])
@@ -447,7 +462,7 @@ internal object StrokeOps {
                     run.add(s.pts[i * 3 + 2])
                 }
             }
-            if (run.size >= 6) out.add(Stroke(s.type, s.color, s.widthMm, run.toArray(), s.opacity, s.locked))
+            if (run.size >= 6) out.add(Stroke(s.type, s.color, s.widthMm, run.toArray(), s.opacity, s.locked, 0L, s.linkType, s.linkData))
         }
         if (changed) {
             list.clear()
@@ -460,13 +475,17 @@ internal object StrokeOps {
 /**
  * Guardado de trazos: filesDir/strokes/<idNota>.bin (binario compacto: x, y en 0,01 mm y presión
  * en un byte). Se escribe en segundo plano y por archivo temporal. Archivo dañado => sin trazos.
- * Dos versiones: "ALN1" (la de siempre) y "ALN2", que añade por trazo un byte de banderas (bit 0 = bloqueado) y otro de
- * opacidad (0..255). Se lee cualquiera; se escribe ALN2 solo si algún trazo tiene opacidad o bloqueo (si no, ALN1,
- * así las notas sin esas funciones siguen siendo iguales que antes).
+ * Dos versiones: "ALN1" (la de siempre) y "ALN2", que añade por trazo un byte de banderas (bit 0 = bloqueado, bit 1 = tiene
+ * enlace) y otro de opacidad (0..255); si tiene enlace, a continuación un byte de tipo y el texto (UTF). Se lee cualquiera
+ * (los ALN2 sin enlaces, de la versión anterior, se leen igual); se escribe ALN2 solo si algún trazo tiene opacidad, bloqueo
+ * o enlace (si no, ALN1, así las notas sin esas funciones siguen siendo iguales que antes).
  */
 internal object StrokeStore {
     private const val MAGIC = 0x414C4E31
     private const val MAGIC2 = 0x414C4E32
+
+    /** Un enlace se guarda solo si tiene tipo y un texto de tamaño razonable (writeUTF admite hasta 65535 bytes). */
+    private fun hasLink(s: Stroke) = s.linkType != 0 && s.linkData.isNotEmpty() && s.linkData.length <= 16000
     private val exec = Executors.newSingleThreadExecutor()
 
     private fun file(c: Context, id: String) = File(File(c.filesDir, "strokes"), "$id.bin")
@@ -501,9 +520,15 @@ internal object StrokeStore {
                         val w = i.readFloat()
                         var flags = 0
                         var opb = 255
+                        var lt = 0
+                        var ld = ""
                         if (v2) {
                             flags = i.readUnsignedByte()
                             opb = i.readUnsignedByte()
+                            if ((flags and 2) != 0) {
+                                lt = i.readUnsignedByte()
+                                ld = i.readUTF()
+                            }
                         }
                         val n = i.readInt()
                         if (n < 0 || n > 2000000) throw IllegalStateException()
@@ -513,7 +538,7 @@ internal object StrokeStore {
                             pts[k * 3 + 1] = i.readUnsignedShort() / 100f
                             pts[k * 3 + 2] = i.readUnsignedByte() / 255f
                         }
-                        if (n > 0) page.add(Stroke(t, col, w, pts, opb / 255f, (flags and 1) != 0))
+                        if (n > 0) page.add(Stroke(t, col, w, pts, opb / 255f, (flags and 1) != 0, 0L, lt, ld))
                     }
                     doc.pages.add(PageLayers(page))
                 }
@@ -536,7 +561,7 @@ internal object StrokeStore {
             f.parentFile?.mkdirs()
             val tmp = File(f.parentFile, "$id.tmp")
             var v2 = false
-            for (page in pages) for (s in page) if (s.opacity < 1f || s.locked) v2 = true
+            for (page in pages) for (s in page) if (s.opacity < 1f || s.locked || hasLink(s)) v2 = true
             DataOutputStream(BufferedOutputStream(FileOutputStream(tmp))).use { o ->
                 o.writeInt(if (v2) MAGIC2 else MAGIC)
                 o.writeInt(pages.size)
@@ -547,8 +572,13 @@ internal object StrokeStore {
                         o.writeInt(s.color)
                         o.writeFloat(s.widthMm)
                         if (v2) {
-                            o.writeByte(if (s.locked) 1 else 0)
+                            val link = hasLink(s)
+                            o.writeByte((if (s.locked) 1 else 0) or (if (link) 2 else 0))
                             o.writeByte((s.opacity.coerceIn(0f, 1f) * 255f).roundToInt().coerceIn(0, 255))
+                            if (link) {
+                                o.writeByte(s.linkType)
+                                o.writeUTF(s.linkData)
+                            }
                         }
                         o.writeInt(s.n)
                         for (k in 0 until s.n) {

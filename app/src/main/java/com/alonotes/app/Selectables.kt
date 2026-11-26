@@ -56,6 +56,12 @@ internal interface SelectableItem {
     }
 }
 
+/** Algo que puede llevar un enlace (imagen o trazo): web ([ImageItem.LINK_WEB]) o interno ([ImageItem.LINK_INTERNAL]). */
+internal interface Linkable {
+    var linkType: Int
+    var linkData: String
+}
+
 /** Geometría de la transformación (funciones puras). Ángulos en grados, sentido horario, Y hacia abajo. */
 internal object Xf {
     const val MIN_MM = 6f
@@ -138,10 +144,10 @@ internal class ImageItem(
     override var isFlippedV: Boolean = false,
     override var opacity: Float = 1f,
     /** Enlace de la imagen: [LINK_NONE], [LINK_WEB] (linkData = URL) o [LINK_INTERNAL] (linkData = "idNota|númeroDeHoja"). */
-    var linkType: Int = LINK_NONE,
-    var linkData: String = "",
+    override var linkType: Int = LINK_NONE,
+    override var linkData: String = "",
     override var isLocked: Boolean = false
-) : SelectableItem {
+) : SelectableItem, Linkable {
     companion object {
         const val LINK_NONE = 0
         const val LINK_WEB = 1
@@ -235,7 +241,7 @@ internal object SelAct {
  * actual); al terminar, [bake] deja esos puntos como un Stroke nuevo (el trazo no se guarda con transformación aparte, así el
  * archivo de trazos y todo lo demás siguen igual). El orden de dibujo no cambia: el nuevo trazo ocupa el lugar del anterior.
  */
-internal class StrokeItem(var src: Stroke) : SelectableItem {
+internal class StrokeItem(var src: Stroke) : SelectableItem, Linkable {
     override val id: String get() = "s" + src.uid
     override val bounds = RectF()
     override var rotation: Float = 0f
@@ -245,6 +251,11 @@ internal class StrokeItem(var src: Stroke) : SelectableItem {
     // Opacidad y bloqueo viajan con el trazo (se guardan en el archivo de trazos al confirmarse, ver PageViewport.commitStroke).
     override var opacity: Float = src.opacity
     override var isLocked: Boolean = src.locked
+
+    // Enlace del trazo (el mismo que el de las imágenes). Se copia del trazo y se actualiza en adopt(); al cambiarlo se reemplaza
+    // el trazo de la capa (PageViewport.setStrokeLink) y así se guarda con el archivo de trazos.
+    override var linkType: Int = src.linkType
+    override var linkData: String = src.linkData
 
     // Estado al empezar el gesto (la transformación va de b0/rot0 a bounds/rotation).
     private val b0 = RectF()
@@ -321,7 +332,7 @@ internal class StrokeItem(var src: Stroke) : SelectableItem {
             i += 3
         }
         val f = kotlin.math.sqrt(kotlin.math.abs(sx * sy)).coerceIn(0.05f, 20f)
-        val res = Stroke(src.type, src.color, src.widthMm * f, out, opacity, isLocked, src.uid)
+        val res = Stroke(src.type, src.color, src.widthMm * f, out, opacity, isLocked, src.uid, src.linkType, src.linkData)
         cur = res
         curKey[0] = bounds.left
         curKey[1] = bounds.top
@@ -358,7 +369,7 @@ internal class StrokeItem(var src: Stroke) : SelectableItem {
             out[i + 2] = p[i + 2]
             i += 3
         }
-        return Stroke(src.type, src.color, src.widthMm, out, opacity, isLocked, src.uid)
+        return Stroke(src.type, src.color, src.widthMm, out, opacity, isLocked, src.uid, src.linkType, src.linkData)
     }
 
     /** Hace de [out] el trazo de este elemento y reajusta la caja a sus puntos, conservando el giro. */
@@ -393,6 +404,8 @@ internal class StrokeItem(var src: Stroke) : SelectableItem {
         val ncy = cy + lcx * sn + lcy * cs
         bounds.set(ncx - w / 2f, ncy - h / 2f, ncx + w / 2f, ncy + h / 2f)
         src = out
+        linkType = out.linkType
+        linkData = out.linkData
         cur = null
         b0.set(bounds)
         rot0 = rotation
