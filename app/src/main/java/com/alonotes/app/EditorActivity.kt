@@ -150,6 +150,7 @@ class EditorActivity : Activity() {
         }
         layersPanel.docId = docId
         layersPanel.onMoveMode = { viewport.layerMoveMode = it }
+        layersPanel.onOpacityLive = { viewport.refreshPage() } // la opacidad de la capa se ve mientras se mueve la barra
         layersPanel.onLayersChanged = { dirty ->
             layers.count = layersPanel.layerCount
             if (dirty) {

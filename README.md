@@ -422,6 +422,14 @@ el ícono del launcher (color fijo).
 - **Capa bloqueada:** no se dibuja ni se borra en ella (lápiz, marcador, formas, borrador), no se escribe texto, no se pega ni se insertan imágenes o stickers, no se seleccionan ni mueven sus objetos (al bloquearla se suelta la
   selección), y Seleccionar todo no la toma. Sí se pueden abrir sus enlaces y verla. La fila de la capa muestra un candado.
 
+## Opacidad de capa funcional (v0.31.0)
+- `Layer.opacity` (0 a 1) ya existía: se guardaba en el JSON de capas y en el historial, y la hoja ya la aplicaba al dibujar la capa como UN bloque (`LayerBlend.begin`: `saveLayerAlpha`, o `saveLayer` con
+  el modo de fusión y la opacidad en el `Paint`). Lo que faltaba era la barra del panel, que era solo visual. No cambió el modelo ni el dibujo.
+- **Barra (`LayersPanel`):** siempre muestra la opacidad real de la capa seleccionada (`syncOpacity`, que se llama en `fillList`: al cambiar de capa, agregar, eliminar, pegar, unir, limpiar, deshacer, cambiar de hoja...).
+  Al moverla, la opacidad de la capa cambia en tiempo real (`onOpacityLive` -> `viewport.refreshPage()`, solo redibuja) y se guarda UNA vez al soltar (`commitOpacity` -> `onVisibilityChanged`: redibuja y guarda el JSON de
+  capas; también a los 400 ms si no llega el aviso de soltar). Cada movimiento de la barra es UN paso del historial (foto de la hoja de antes, `PageSnap`). Se puede cambiar la opacidad de una capa bloqueada.
+- No afecta a los modos de fusión (la misma capa de dibujo lleva opacidad y modo) ni al bloqueo.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

@@ -28,12 +28,14 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 /**
  * Panel flotante de capas (Fase 6, solo visual). Se arrastra por su barra superior y tiene dos
  * estados: expandido (lista de capas, barra de opacidad) y minimizado (cuadro con el número de
  * capas; se arrastra igual y un toque lo expande). Vive dentro del área de hojas del editor.
- * La lista y la opacidad todavía no cambian datos: las capas reales llegan en la siguiente fase.
+ * Edita las capas reales de la hoja: agregar, copiar, pegar, unir, limpiar, mover, eliminar, reordenar, modo de fusión, bloqueo y la
+ * opacidad de la capa seleccionada (la barra de abajo).
  */
 internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     private companion object {
@@ -76,6 +78,17 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     private lateinit var touch: ItemTouchHelper
     private var moved = false
     private val pct = UiKit.text(a, "100%", 15, a.getColor(R.color.ink))
+
+    // Barra de opacidad: siempre muestra la de la capa seleccionada (ver syncOpacity). Mientras se mueve se guarda la foto de la hoja de
+    // antes (opPre, para un solo paso del historial) y la capa que se está cambiando (opLayer).
+    private var opSeek: SeekBar? = null
+    private var opPre: PageSnap? = null
+    private var opRecorded = false
+    private var opLayer: Layer? = null
+    private val opCommit = Runnable { commitOpacity() }
+
+    /** Se llama mientras se mueve la barra de opacidad (solo hay que redibujar la hoja: se guarda al soltar). */
+    var onOpacityLive: (() -> Unit)? = null
     private val slop = ViewConfiguration.get(a).scaledTouchSlop
     private var placed = false
     private var dRx = 0f
@@ -191,7 +204,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         touch.attachToRecyclerView(rv)
         center.addView(rv, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Opacidad (solo visual por ahora). Encima de ella estaban los íconos Recorte y Bloqueo alfa: se quitaron con su franja.
+        // Opacidad de la capa seleccionada. Encima de ella estaban los íconos Recorte y Bloqueo alfa: se quitaron con su franja.
         val line2 = View(a)
         line2.setBackgroundColor(a.getColor(R.color.ln))
         center.addView(line2, LinearLayout.LayoutParams(-1, dp(1)))
@@ -209,11 +222,29 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
                 pct.text = "$p%"
+                if (!fromUser) return // un cambio de capa que solo actualiza la barra no toca datos
+                val m = model ?: return
+                val ly = opLayer ?: m.layers[m.selected]
+                if (opPre == null) opPre = m.snapshot() // la hoja ANTES de tocar la opacidad (antes de asignar)
+                opLayer = ly
+                ly.opacity = p / 100f
+                if (!opRecorded) {
+                    opRecorded = true
+                    opPre?.let { onRecord?.invoke(it) } // una sola entrada en el historial por cada movimiento de la barra
+                }
+                onOpacityLive?.invoke() // la hoja se ve al instante
+                sb.removeCallbacks(opCommit)
+                sb.postDelayed(opCommit, 400) // por si no llega el aviso de soltar (por ejemplo, con teclado)
             }
 
             override fun onStartTrackingTouch(sb: SeekBar) {}
-            override fun onStopTrackingTouch(sb: SeekBar) {}
+
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                sb.removeCallbacks(opCommit)
+                commitOpacity()
+            }
         })
+        opSeek = seek
         foot.addView(seek, LinearLayout.LayoutParams(0, -2, 1f))
         center.addView(foot, LinearLayout.LayoutParams(-1, dp(52)))
         return center
@@ -230,6 +261,25 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     private fun fillList() {
         badge.text = layerCount.toString()
         adapter.notifyDataSetChanged()
+        syncOpacity()
+    }
+
+    /** Pone la barra y el porcentaje con la opacidad REAL de la capa seleccionada (al cambiar de capa, deshacer, pegar, unir...). */
+    private fun syncOpacity() {
+        val m = model ?: return
+        if (m.selected !in m.layers.indices) return
+        val p = (m.layers[m.selected].opacity.coerceIn(0f, 1f) * 100f).roundToInt()
+        opSeek?.progress = p
+        pct.text = "$p%"
+    }
+
+    /** Fin de un movimiento de la barra de opacidad: se guardan las capas (una sola vez) y queda lista para el siguiente. */
+    private fun commitOpacity() {
+        val changed = opRecorded
+        opPre = null
+        opRecorded = false
+        opLayer = null
+        if (changed) onVisibilityChanged?.invoke() // redibuja y guarda el JSON de capas
     }
 
     private fun select(idx: Int) {
