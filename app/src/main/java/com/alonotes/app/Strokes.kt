@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Path
 import android.graphics.RectF
 import android.view.View
@@ -42,6 +44,42 @@ internal class FloatList {
     operator fun get(i: Int): Float = a[i]
     fun isEmpty(): Boolean = size == 0
     fun toArray(): FloatArray = a.copyOf(size)
+}
+
+/**
+ * Modos de fusión de una capa: cómo se combina con lo que hay debajo. Normal, Multiplicar, Superponer (Overlay) y Trama (Screen), con
+ * PorterDuffXfermode (vale desde Android 8). La capa se dibuja primero aparte y se combina al final con su opacidad.
+ */
+internal object LayerBlend {
+    const val NORMAL = 0
+    const val MULTIPLY = 1
+    const val OVERLAY = 2
+    const val SCREEN = 3
+
+    val names = arrayOf("Normal", "Multiplicar", "Superponer", "Trama")
+
+    private fun mode(b: Int): PorterDuff.Mode? = when (b) {
+        MULTIPLY -> PorterDuff.Mode.MULTIPLY
+        OVERLAY -> PorterDuff.Mode.OVERLAY
+        SCREEN -> PorterDuff.Mode.SCREEN
+        else -> null
+    }
+
+    /**
+     * Abre la capa de dibujo de [ly] (para su opacidad y su modo de fusión) y devuelve lo que hay que pasar a restoreToCount al terminar
+     * de dibujar la capa, o -1 si no hace falta (opacidad completa y modo normal).
+     */
+    fun begin(c: Canvas, ly: Layer, w: Float, h: Float): Int {
+        val a = (ly.opacity.coerceIn(0f, 1f) * 255f).roundToInt()
+        val m = mode(ly.blendMode)
+        if (m != null) {
+            val p = Paint()
+            p.alpha = a
+            p.xfermode = PorterDuffXfermode(m)
+            return c.saveLayer(0f, 0f, w, h, p)
+        }
+        return if (a < 255) c.saveLayerAlpha(0f, 0f, w, h, a) else -1
+    }
 }
 
 /**
@@ -187,13 +225,19 @@ internal class Stroke(
     }
 }
 
-/** Una capa de una hoja: sus trazos (canvas), visibilidad y opacidad. No usar equals/hashCode: se identifica por id. */
+/**
+ * Una capa de una hoja: sus trazos (canvas), visibilidad, opacidad, modo de fusión y bloqueo. No usar equals/hashCode: se identifica por id.
+ * [blendMode]: 0 normal, 1 multiplicar, 2 superponer, 3 trama (ver [LayerBlend]). [isLocked]: no se dibuja, borra ni selecciona en ella.
+ * Los dos se guardan en el JSON de capas (los archivos anteriores no los traen y cargan como normal y desbloqueada).
+ */
 @Serializable
 internal data class Layer(
     val id: Long,
     var name: String,
     var isVisible: Boolean = true,
     var opacity: Float = 1f,
+    var blendMode: Int = 0,
+    var isLocked: Boolean = false,
     // Los trazos no se serializan aquí: van en strokes/<id>.bin.
     @Transient val canvas: ArrayList<Stroke> = ArrayList(),
     // Imágenes de la capa (se guardan aparte: archivos en images/<idNota>/ y sus datos en layers/<idNota>.json).
@@ -253,6 +297,30 @@ internal class PageLayers(first: List<Stroke>? = null) {
         val sel = layers[selected]
         layers.add(to, layers.removeAt(from))
         selected = layers.indexOfFirst { it === sel }
+    }
+
+    /**
+     * Pasa todo lo de la capa seleccionada (trazos, imágenes y textos, encima de lo que ya tenía) a la capa de abajo y elimina la
+     * seleccionada; queda seleccionada la de abajo. Devuelve false si no hay capa debajo.
+     */
+    fun mergeDown(): Boolean {
+        if (selected <= 0) return false
+        val top = layers[selected]
+        val low = layers[selected - 1]
+        low.canvas.addAll(top.canvas)
+        low.items.addAll(top.items)
+        low.texts.addAll(top.texts)
+        layers.removeAt(selected)
+        selected -= 1
+        return true
+    }
+
+    /** Borra todos los trazos, imágenes y textos de la capa seleccionada; la capa queda vacía. */
+    fun clearSelected() {
+        val l = layers[selected]
+        l.canvas.clear()
+        l.items.clear()
+        l.texts.clear()
     }
 
     /** Elimina la capa seleccionada. La última capa no se puede eliminar. */
@@ -330,7 +398,8 @@ internal class PageLayers(first: List<Stroke>? = null) {
                         t.isFlippedH, t.isFlippedV, t.linkType, t.linkData,
                         t.isFixedWidth, t.letterSpacing, t.textAlign, t.lineHeight
                     )
-                }
+                },
+                ly.blendMode, ly.isLocked
             )
         },
         selected, seq
@@ -343,7 +412,7 @@ internal class PageLayers(first: List<Stroke>? = null) {
         for (ly in layers) for (im in ly.items) cache[im.id + "|" + im.file.path] = im.bitmap
         val out = ArrayList<Layer>()
         for (ls in s.layers) {
-            val ly = Layer(ls.id, ls.name, ls.visible, ls.opacity)
+            val ly = Layer(ls.id, ls.name, ls.visible, ls.opacity, ls.blend, ls.locked)
             ly.canvas.addAll(ls.strokes)
             for (isn in ls.items) {
                 val im = ImageItem(isn.id, isn.file, RectF(isn.l, isn.t, isn.r, isn.b), isn.rot, isn.baseW, isn.fh, isn.fv, isn.op, isn.lt, isn.ld, isn.lk)
@@ -770,8 +839,7 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
         if (pl != null) {
             for ((i, ly) in pl.layers.withIndex()) {
                 if (!ly.isVisible) continue
-                val a = (ly.opacity.coerceIn(0f, 1f) * 255f).roundToInt()
-                val sc = if (a < 255) c.saveLayerAlpha(0f, 0f, width.toFloat(), height.toFloat(), a) else -1
+                val sc = LayerBlend.begin(c, ly, width.toFloat(), height.toFloat()) // opacidad y modo de fusión de la capa
                 if (ly.items.isNotEmpty()) {
                     // Las imágenes solo se ven dentro de la hoja (lo que se sale queda recortado), debajo de los trazos.
                     val n = c.save()

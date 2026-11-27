@@ -55,7 +55,9 @@ internal class ClipLayer(
     val opacity: Float,
     val strokes: List<Stroke>,
     val images: List<ClipImage>,
-    val texts: List<ClipText> = emptyList()
+    val texts: List<ClipText> = emptyList(),
+    val blend: Int = 0,
+    val locked: Boolean = false
 )
 
 /** Una hoja copiada: sus datos de página (JSON), sus capas con trazos e imágenes, y la capa seleccionada. */
@@ -110,7 +112,7 @@ internal object PageClipboard {
                         t.isFixedWidth, t.letterSpacing, t.textAlign, t.lineHeight
                     )
                 }
-                layers.add(ClipLayer(ly.name, ly.isVisible, ly.opacity, strokes, imgs, texts))
+                layers.add(ClipLayer(ly.name, ly.isVisible, ly.opacity, strokes, imgs, texts, ly.blendMode, ly.isLocked))
             }
             out.add(ClipPage(js.toString(), layers, pl.selected))
         }
@@ -133,7 +135,7 @@ internal object PageClipboard {
             }
             val ls = ArrayList<Layer>()
             for ((i, cl) in cp.layers.withIndex()) {
-                val ly = Layer((i + 1).toLong(), cl.name, cl.isVisible, cl.opacity)
+                val ly = Layer((i + 1).toLong(), cl.name, cl.isVisible, cl.opacity, cl.blend, cl.locked)
                 for (s in cl.strokes) ly.canvas.add(Stroke(s.type, s.color, s.widthMm, s.pts.copyOf(), s.opacity, s.locked, 0L, s.linkType, s.linkData))
                 for (im in cl.images) {
                     if (!im.file.exists()) continue

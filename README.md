@@ -404,6 +404,24 @@ el ícono del launcher (color fijo).
   `refreshNumbers()` actualiza los números de las filas visibles sin rehacerlas; al agregar, borrar o deshacer se rehace la lista. El diálogo de borrar dice "la capa N". El orden de dibujo no cambió: el índice 0 se
   dibuja primero y arrastrar sigue moviendo la capa en el modelo (`PageLayers.move`), así que el Z-index coincide con la numeración.
 
+## Capas completas: copiar, pegar, unir, limpiar, mover, bloquear y modos de fusión (v0.30.0)
+- **Panel (`LayersPanel`):** izquierda, de arriba abajo: agregar, copiar capa, pegar capa, incorporar la siguiente (unir hacia abajo). Derecha: limpiar, mover capa, eliminar y menú ⋮. La numeración (1, 2, 3...
+  por posición, la de abajo es la 1) se recalcula sola tras cada acción.
+- **Copiar / pegar capa (`LayerClipboard.kt`, nuevo):** copia profunda de la capa y todos sus objetos (trazos con puntos nuevos, imágenes copiadas a `layerclip/`, textos). Pegar crea una capa nueva JUSTO ENCIMA de
+  la actual con objetos de ids nuevos (trazos nuevos, ids nuevos de imágenes y textos, archivos de imagen nuevos en `images/<idNota>/`), así que nada se comparte; se puede pegar varias veces y en otra hoja o nota.
+  Usa las clases de `PageClipboard` (`ClipLayer`, `ClipImage`, `ClipText`).
+- **Unir hacia abajo (`PageLayers.mergeDown`):** trazos, imágenes y textos de la capa actual pasan, encima de lo que ya tenía, a la de abajo y la actual se elimina (queda seleccionada la de abajo). No se puede si no hay capa
+  debajo o si alguna de las dos está bloqueada. Los objetos toman la opacidad y el modo de fusión de la capa de abajo.
+- **Limpiar (`PageLayers.clearSelected`):** borra trazos, imágenes y textos de la capa y la deja vacía (pide confirmación si tenía algo; no en capas bloqueadas). Eliminar una capa bloqueada pide desbloquearla antes.
+- **Mover capa:** el botón activa un modo (resaltado) en el que arrastrar un dedo por la hoja mueve toda la capa seleccionada. `PageViewport`: `layerMoveMode`, `M_LMOVE`, `beginLayerMove/layerMove/endLayerMove`. Los trazos
+  se dibujan con una matriz (como en un grupo) y se fijan al soltar (mismo orden e id); imágenes y textos mueven su recuadro en vivo. Los trazos mandan: la capa no sale de la hoja (coordenadas de 0 a 655 mm). Un paso del
+  historial, se guarda con trazos y capas. Cerrar el panel o elegir una herramienta sale del modo; dos dedos siguen haciendo zoom.
+- **Menú ⋮:** Modo de fusión (Normal, Multiplicar, Superponer, Trama) con la actual marcada, y un interruptor "Bloquear capa". Cada cambio es un paso del historial.
+- **Modelo y guardado:** `Layer.blendMode` (0 normal, 1 multiplicar, 2 superponer, 3 trama) y `Layer.isLocked` se guardan en el JSON de capas (los archivos anteriores cargan como normal y desbloqueada), en el historial
+  (`LayerSnap`) y al copiar hojas (`ClipLayer`). Dibujo: `LayerBlend.begin` abre la capa aparte y la combina con su opacidad y un `PorterDuffXfermode` (hoja y miniaturas); sin modo y con opacidad completa no cuesta nada.
+- **Capa bloqueada:** no se dibuja ni se borra en ella (lápiz, marcador, formas, borrador), no se escribe texto, no se pega ni se insertan imágenes o stickers, no se seleccionan ni mueven sus objetos (al bloquearla se suelta la
+  selección), y Seleccionar todo no la toma. Sí se pueden abrir sus enlaces y verla. La fila de la capa muestra un candado.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

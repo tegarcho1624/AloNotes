@@ -148,6 +148,8 @@ class EditorActivity : Activity() {
             viewport.refreshPage()
             persistLayers()
         }
+        layersPanel.docId = docId
+        layersPanel.onMoveMode = { viewport.layerMoveMode = it }
         layersPanel.onLayersChanged = { dirty ->
             layers.count = layersPanel.layerCount
             if (dirty) {
@@ -331,6 +333,10 @@ class EditorActivity : Activity() {
         val pl = strokes.page(viewport.index)
         if (!pl.layers[pl.selected].isVisible) {
             toast("La capa está oculta")
+            return
+        }
+        if (pl.layers[pl.selected].isLocked) {
+            toast("La capa está bloqueada")
             return
         }
         val src = StickerStore.fileOf(this, s)
@@ -527,7 +533,7 @@ class EditorActivity : Activity() {
             return
         }
         when (a) {
-            SelAct.ALL -> if (viewport.selectAll() == 0) toast("No hay objetos en esta capa")
+            SelAct.ALL -> if (viewport.selectAll() == 0) toast("No hay objetos que seleccionar en esta capa (vacía o bloqueada)")
             SelAct.STICKER -> saveAsSticker()
             SelAct.COPY -> copySelection()
             SelAct.PASTE -> pasteObjects()
@@ -563,6 +569,10 @@ class EditorActivity : Activity() {
         val layer = pl.layers[pl.selected]
         if (!layer.isVisible) {
             toast("La capa está oculta")
+            return
+        }
+        if (layer.isLocked) {
+            toast("La capa está bloqueada")
             return
         }
         val made = ObjectClipboard.paste(this, docId, sp.wMm / 2f, sp.hMm / 2f)
@@ -937,6 +947,10 @@ class EditorActivity : Activity() {
             Toast.makeText(this, "La capa está oculta", Toast.LENGTH_SHORT).show()
             return
         }
+        if (pl.layers[pl.selected].isLocked) {
+            Toast.makeText(this, "La capa está bloqueada", Toast.LENGTH_SHORT).show()
+            return
+        }
         val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
         i.addCategory(Intent.CATEGORY_OPENABLE)
         i.type = "image/*"
@@ -983,6 +997,10 @@ class EditorActivity : Activity() {
         if (total == 0 || sp == null) return
         val pl = strokes.page(viewport.index)
         val layer = pl.layers[pl.selected]
+        if (layer.isLocked) { // por si se bloqueó la capa mientras se cargaba la imagen
+            toast("La capa está bloqueada")
+            return
+        }
         // Cabe en [frac] de la hoja (60 % las fotos, 40 % los stickers), conservando la proporción.
         val k = minOf(sp.wMm * frac / bm.width, sp.hMm * frac / bm.height)
         val w = bm.width * k
@@ -1003,6 +1021,7 @@ class EditorActivity : Activity() {
     }
 
     private fun pickTool(t: Int) {
+        if (::layersPanel.isInitialized) layersPanel.setMoveMode(false) // elegir una herramienta sale del modo "Mover capa"
         editOnly {
             tool = if (tool == t) 0 else t
             viewport.tool = tool

@@ -55,7 +55,9 @@ internal class LayerSnap(
     val opacity: Float,
     val strokes: List<Stroke>,
     val items: List<ItemSnap>,
-    val texts: List<TextSnap> = emptyList()
+    val texts: List<TextSnap> = emptyList(),
+    val blend: Int = 0,
+    val locked: Boolean = false
 )
 
 /** Estado lógico de una hoja: sus capas con trazos e imágenes, la capa seleccionada y el contador de nombres. */

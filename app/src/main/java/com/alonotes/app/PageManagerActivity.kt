@@ -343,8 +343,7 @@ class PageManagerActivity : Activity() {
         c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), paint)
         for (ly in pl.layers) {
             if (!ly.isVisible) continue
-            val a = (ly.opacity.coerceIn(0f, 1f) * 255f).roundToInt()
-            val sc = if (a < 255) c.saveLayerAlpha(0f, 0f, w.toFloat(), h.toFloat(), a) else -1
+            val sc = LayerBlend.begin(c, ly, w.toFloat(), h.toFloat()) // opacidad y modo de fusión, como en la hoja
             val n = c.save()
             c.clipRect(0f, 0f, w.toFloat(), h.toFloat())
             for (im in ly.items) {

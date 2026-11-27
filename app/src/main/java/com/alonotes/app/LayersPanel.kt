@@ -5,7 +5,9 @@ import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Outline
+import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.view.Gravity
 import android.view.MotionEvent
@@ -14,10 +16,13 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupWindow
 import android.widget.ScrollView
 import android.widget.Toast
 import android.widget.SeekBar
+import android.widget.Switch
 import android.widget.TextView
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -52,8 +57,16 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     var onRecord: ((PageSnap) -> Unit)? = null
     private var dragPre: PageSnap? = null
 
-    /** Se llama al mostrar u ocultar una capa (solo hay que redibujar la hoja). */
+    /** Se llama al mostrar u ocultar una capa, o al cambiar su modo de fusión o su bloqueo (hay que redibujar la hoja y guardar las capas). */
     var onVisibilityChanged: (() -> Unit)? = null
+
+    /** Id de la nota abierta: las imágenes de una capa pegada se copian a su carpeta de imágenes. */
+    var docId = ""
+
+    /** Se activa o desactiva el modo "Mover capa" (el visor mueve toda la capa seleccionada al arrastrar). */
+    var onMoveMode: ((Boolean) -> Unit)? = null
+    private var moveMode = false
+    private var moveBtn: View? = null
 
     private val full = LinearLayout(a)
     private val mini = FrameLayout(a)
@@ -116,7 +129,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         // Cuerpo: barra izquierda | columna central | barra derecha
         val body = LinearLayout(a)
         body.orientation = LinearLayout.HORIZONTAL
-        body.addView(sideBar(intArrayOf(Icons.PLUS, Icons.COPY_PLUS, Icons.ARROW_DOWN)), LinearLayout.LayoutParams(dp(40), -1))
+        body.addView(sideBar(intArrayOf(Icons.PLUS, Icons.COPY_PLUS, Icons.PASTE, Icons.ARROW_DOWN)), LinearLayout.LayoutParams(dp(40), -1))
         body.addView(vline(), LinearLayout.LayoutParams(dp(1), -1))
         body.addView(buildCenter(), LinearLayout.LayoutParams(0, -1, 1f))
         body.addView(vline(), LinearLayout.LayoutParams(dp(1), -1))
@@ -139,12 +152,22 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         col.orientation = LinearLayout.VERTICAL
         val ink = a.getColor(R.color.ink)
         for (t in icons) {
-            val act: () -> Unit = when (t) {
-                Icons.PLUS -> this::addLayer
-                Icons.TRASH -> this::deleteLayer
-                else -> this::soon
+            val b = UiKit.iconBtn(a, t, ink, 40, 22)
+            b.setOnClickListener {
+                when (t) {
+                    Icons.PLUS -> addLayer() // agregar capa
+                    Icons.COPY_PLUS -> copyLayer() // copiar capa
+                    Icons.PASTE -> pasteLayer() // pegar capa
+                    Icons.ARROW_DOWN -> mergeDown() // incorporar la capa a la de abajo
+                    Icons.CHECKER -> clearLayer() // limpiar capa
+                    Icons.MOVE -> setMoveMode(!moveMode) // modo mover capa
+                    Icons.TRASH -> deleteLayer() // eliminar capa
+                    Icons.DOTS_V -> showMenu(b) // modos de fusión y bloqueo
+                    else -> soon()
+                }
             }
-            col.addView(UiKit.iconBtn(a, t, ink, 40, 22, act), UiKit.box(a, 40))
+            if (t == Icons.MOVE) moveBtn = b
+            col.addView(b, UiKit.box(a, 40))
         }
         val sv = ScrollView(a)
         sv.isVerticalScrollBarEnabled = false
@@ -314,6 +337,10 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             return
         }
         val ly = m.layers[m.selected]
+        if (ly.isLocked) {
+            Toast.makeText(a, "Desbloquea la capa para eliminarla", Toast.LENGTH_SHORT).show()
+            return
+        }
         fun go() {
             val pre = m.snapshot()
             m.removeSelected()
@@ -323,6 +350,162 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         }
         if (ly.canvas.isEmpty()) go()
         else UiKit.confirm(a, "¿Eliminar la capa " + (m.selected + 1) + " y sus trazos?", "Eliminar") { go() }
+    }
+
+    /** Copia la capa seleccionada (con todos sus objetos) al portapapeles de capas. */
+    private fun copyLayer() {
+        val m = model ?: return
+        LayerClipboard.copy(a, m.layers[m.selected])
+        Toast.makeText(a, "Capa copiada", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Pega la capa copiada como una capa nueva justo encima de la seleccionada, con objetos nuevos (ids nuevos). */
+    private fun pasteLayer() {
+        val m = model ?: return
+        if (LayerClipboard.isEmpty) {
+            Toast.makeText(a, "No hay una capa copiada", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!m.canAdd) {
+            Toast.makeText(a, "Máximo " + PageLayers.MAX + " capas", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pre = m.snapshot()
+        val l = m.add()
+        if (!LayerClipboard.paste(a, docId, l)) {
+            m.removeSelected()
+            return
+        }
+        onRecord?.invoke(pre)
+        fillList()
+        onLayersChanged?.invoke(true)
+    }
+
+    /** Incorporar la siguiente capa: todo lo de la capa seleccionada pasa a la de abajo y la seleccionada se elimina. */
+    private fun mergeDown() {
+        val m = model ?: return
+        if (m.selected <= 0) {
+            Toast.makeText(a, "No hay una capa debajo", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (m.layers[m.selected].isLocked || m.layers[m.selected - 1].isLocked) {
+            Toast.makeText(a, "Hay una capa bloqueada", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pre = m.snapshot()
+        m.mergeDown()
+        onRecord?.invoke(pre)
+        fillList()
+        onLayersChanged?.invoke(true)
+    }
+
+    /** Limpiar la capa seleccionada: se borran sus trazos, imágenes y textos y la capa queda vacía. */
+    private fun clearLayer() {
+        val m = model ?: return
+        val ly = m.layers[m.selected]
+        if (ly.isLocked) {
+            Toast.makeText(a, "La capa está bloqueada", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (ly.canvas.isEmpty() && ly.items.isEmpty() && ly.texts.isEmpty()) {
+            Toast.makeText(a, "La capa ya está vacía", Toast.LENGTH_SHORT).show()
+            return
+        }
+        UiKit.confirm(a, "¿Limpiar la capa " + (m.selected + 1) + "? Se borrarán sus trazos, imágenes y textos.", "Limpiar") {
+            val pre = m.snapshot()
+            m.clearSelected()
+            onRecord?.invoke(pre)
+            fillList()
+            onLayersChanged?.invoke(true)
+        }
+    }
+
+    /** Activa o desactiva el modo "Mover capa" (el botón queda resaltado mientras está activo). */
+    fun setMoveMode(on: Boolean) {
+        if (moveMode == on) return
+        moveMode = on
+        moveBtn?.let { UiKit.ripple(a, it, 12, if (on) ThemeUtils.accentBg(a) else 0) }
+        onMoveMode?.invoke(on)
+        if (on) Toast.makeText(a, "Arrastra sobre la hoja para mover toda la capa", Toast.LENGTH_SHORT).show()
+    }
+
+    /** Menú ⋮: modo de fusión de la capa seleccionada (Normal, Multiplicar, Superponer, Trama) y un interruptor para bloquearla. */
+    private fun showMenu(anchor: View) {
+        val m = model ?: return
+        val ly = m.layers[m.selected]
+        val ink = a.getColor(R.color.ink)
+        val mut = a.getColor(R.color.mut)
+        val acc = ThemeUtils.accentHi(a)
+        val col = LinearLayout(a)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(6), dp(8), dp(6), dp(8))
+        col.background = UiKit.rect(a, a.getColor(R.color.sf2), 16, a.getColor(R.color.ln2))
+        var pw: PopupWindow? = null
+        val head = UiKit.text(a, "Modo de fusión", 13, mut)
+        head.setPadding(dp(12), 0, dp(12), dp(4))
+        col.addView(head)
+        for (i in LayerBlend.names.indices) {
+            val r = LinearLayout(a)
+            r.gravity = Gravity.CENTER_VERTICAL
+            r.setPadding(dp(12), 0, dp(10), 0)
+            r.addView(UiKit.text(a, LayerBlend.names[i], 16, ink), LinearLayout.LayoutParams(0, -2, 1f))
+            if (ly.blendMode == i) {
+                val ck = ImageView(a)
+                ck.setImageDrawable(Icons(Icons.CHECK, acc, false))
+                r.addView(ck, UiKit.box(a, 24))
+            }
+            UiKit.ripple(a, r, 10, if (ly.blendMode == i) ThemeUtils.accentBg(a) else 0)
+            r.setOnClickListener {
+                pw?.dismiss()
+                setBlend(ly, i)
+            }
+            col.addView(r, LinearLayout.LayoutParams(dp(210), dp(44)))
+        }
+        val line = View(a)
+        line.setBackgroundColor(a.getColor(R.color.ln))
+        val lpLine = LinearLayout.LayoutParams(-1, dp(1))
+        lpLine.topMargin = dp(6)
+        lpLine.bottomMargin = dp(6)
+        col.addView(line, lpLine)
+        val lr = LinearLayout(a)
+        lr.gravity = Gravity.CENTER_VERTICAL
+        lr.setPadding(dp(12), 0, dp(10), 0)
+        lr.addView(UiKit.text(a, "Bloquear capa", 16, ink), LinearLayout.LayoutParams(0, -2, 1f))
+        val sw = Switch(a)
+        sw.isChecked = ly.isLocked
+        val states = arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf())
+        sw.thumbTintList = ColorStateList(states, intArrayOf(acc, mut))
+        sw.trackTintList = ColorStateList(states, intArrayOf(ThemeUtils.accentBg(a), a.getColor(R.color.ln2)))
+        sw.setOnCheckedChangeListener { _, on -> setLocked(ly, on) }
+        lr.addView(sw)
+        UiKit.ripple(a, lr, 10, 0)
+        lr.setOnClickListener { sw.isChecked = !sw.isChecked }
+        col.addView(lr, LinearLayout.LayoutParams(dp(210), dp(48)))
+        val p = PopupWindow(col, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true)
+        p.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        p.elevation = dp(8).toFloat()
+        pw = p
+        p.showAsDropDown(anchor, 0, 0, Gravity.END)
+    }
+
+    /** Cambia el modo de fusión de la capa (un paso del historial); se redibuja la hoja y se guardan las capas. */
+    private fun setBlend(ly: Layer, mode: Int) {
+        if (ly.blendMode == mode) return
+        val pre = model?.snapshot()
+        ly.blendMode = mode
+        if (pre != null) onRecord?.invoke(pre)
+        fillList()
+        onVisibilityChanged?.invoke()
+    }
+
+    /** Bloquea o desbloquea la capa (un paso del historial): en una capa bloqueada no se dibuja, borra ni selecciona. */
+    private fun setLocked(ly: Layer, on: Boolean) {
+        if (ly.isLocked == on) return
+        val pre = model?.snapshot()
+        ly.isLocked = on
+        if (pre != null) onRecord?.invoke(pre)
+        fillList()
+        onVisibilityChanged?.invoke() // refreshPage suelta la selección de objetos de esa capa
     }
 
     private fun toggleVisible(ly: Layer) {
@@ -371,6 +554,12 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         nameTv.tag = ly // para refreshNumbers
         r.tag = nameTv
         r.addView(nameTv, tp)
+        // Candado: la capa está bloqueada
+        if (ly.isLocked) {
+            val lk = ImageView(a)
+            lk.setImageDrawable(Icons(Icons.LOCK, a.getColor(R.color.mut), false))
+            r.addView(lk, LinearLayout.LayoutParams(dp(20), dp(20)))
+        }
         // Asa de arrastre (≡): al tocarla empieza el arrastre de esta fila.
         val handle = UiKit.iconBtn(a, Icons.MENU, ink, 36, 20)
         handle.setOnTouchListener { _, e ->
@@ -473,6 +662,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     }
 
     fun close() {
+        setMoveMode(false)
         opened = false
         onClose?.invoke()
     }

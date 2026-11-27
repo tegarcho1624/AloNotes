@@ -199,6 +199,30 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private var editColor = 0
     private var swallowTouch = false
 
+    /**
+     * Modo "Mover capa" (lo activa el panel de capas): arrastrar un dedo por la hoja mueve todos los objetos de la capa seleccionada
+     * (trazos, imágenes y textos) a la vez; mientras está activo no se dibuja ni se selecciona.
+     */
+    var layerMoveMode = false
+        set(v) {
+            if (field != v) {
+                if (!v) endManip()
+                field = v
+            }
+        }
+
+    // Mover capa: punto de partida (mm), límites de sus trazos y los objetos que se mueven con su recuadro inicial.
+    private var lmX0 = 0f
+    private var lmY0 = 0f
+    private var lmPre: PageSnap? = null
+    private var lmHasStrokes = false
+    private var lmMinX = 0f
+    private var lmMinY = 0f
+    private var lmMaxX = 0f
+    private var lmMaxY = 0f
+    private val lmItems = ArrayList<SelectableItem>()
+    private val lmB0 = ArrayList<RectF>()
+
     /** Forma de la herramienta formas (5): [ShapeGen.LINE], [ShapeGen.RECT] o [ShapeGen.CIRCLE]. La elige el editor. */
     var shape = ShapeGen.LINE
 
@@ -258,6 +282,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         const val M_GMOVE = 7
         const val M_GRESIZE = 8
         const val M_GROT = 9
+        const val M_LMOVE = 10 // mover toda la capa seleccionada
 
         // Tiradores: 0 sup-izq, 1 sup, 2 sup-der, 3 izq, 4 der, 5 inf-izq, 6 inf, 7 inf-der (8 = círculo de giro).
         val HX = intArrayOf(-1, 0, 1, -1, 1, -1, 0, 1)
@@ -366,6 +391,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     fun selectAll(): Int {
         val pl = strokes?.page(index) ?: return 0
         val ly = pl.layers[pl.selected]
+        if (ly.isLocked) return 0 // en una capa bloqueada no se selecciona nada
         val items = ArrayList<SelectableItem>()
         for (im in ly.items) if (!im.isLocked) items.add(im)
         for (t in ly.texts) if (!t.isLocked) items.add(t)
@@ -379,6 +405,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val out = HashSet<Any>()
         val pl = strokes?.page(index) ?: return out
         for (ly in pl.layers) {
+            if (ly.isLocked) continue
             out.addAll(ly.canvas)
             out.addAll(ly.items)
             out.addAll(ly.texts)
@@ -703,6 +730,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             Toast.makeText(context, "La capa está oculta", Toast.LENGTH_SHORT).show()
             return
         }
+        // Tampoco en una capa bloqueada
+        if (pl != null && pl.layers[pl.selected].isLocked) {
+            Toast.makeText(context, "La capa está bloqueada", Toast.LENGTH_SHORT).show()
+            return
+        }
         penDown = true
         lastX = pt[0]
         lastY = pt[1]
@@ -1006,7 +1038,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val pl = strokes?.page(index) ?: return
         for (li in pl.layers.indices.reversed()) {
             val ly = pl.layers[li]
-            if (!ly.isVisible) continue
+            if (!ly.isVisible || ly.isLocked) continue // una capa bloqueada no se selecciona ni se edita
             for (k in ly.texts.indices.reversed()) {
                 if (ly.texts[k].hit(p[0], p[1])) {
                     startTextEdit(ly.texts[k], p[0], p[1])
@@ -1016,6 +1048,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         }
         if (!pl.layers[pl.selected].isVisible) {
             Toast.makeText(context, "La capa está oculta", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (pl.layers[pl.selected].isLocked) {
+            Toast.makeText(context, "La capa está bloqueada", Toast.LENGTH_SHORT).show()
             return
         }
         startTextEdit(null, p[0], p[1])
@@ -1207,14 +1243,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun itemExists(item: SelectableItem): Boolean {
         val pl = strokes?.page(index) ?: return false
         if (item is StrokeItem) {
-            for (ly in pl.layers) if (ly.canvas.any { it === item.src }) return true
+            for (ly in pl.layers) if (!ly.isLocked && ly.canvas.any { it === item.src }) return true
             return false
         }
         if (item is TextItem) {
-            for (ly in pl.layers) for (it in ly.texts) if (it === item) return true
+            for (ly in pl.layers) if (!ly.isLocked) for (it in ly.texts) if (it === item) return true
             return false
         }
-        for (ly in pl.layers) for (it in ly.items) if (it === item) return true
+        for (ly in pl.layers) if (!ly.isLocked) for (it in ly.items) if (it === item) return true
         return false
     }
 
@@ -1283,7 +1319,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         val pl = strokes?.page(index) ?: return null
         for (li in pl.layers.indices.reversed()) {
             val ly = pl.layers[li]
-            if (!ly.isVisible) continue
+            if (!ly.isVisible || ly.isLocked) continue // una capa bloqueada no se selecciona ni se edita
             for (k in ly.canvas.indices.reversed()) {
                 val st = ly.canvas[k]
                 if (StrokeOps.hit(st, xMm, yMm, 2.5f)) return StrokeItem(st)
@@ -1370,6 +1406,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     }
 
     private fun selMove(e: MotionEvent) {
+        if (manip == M_LMOVE) {
+            layerMove(e)
+            return
+        }
         if (manip == M_GMOVE || manip == M_GRESIZE || manip == M_GROT) {
             groupMove(e)
             return
@@ -1416,6 +1456,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun endManip() {
         if (manip == 0) return
+        if (manip == M_LMOVE) {
+            endLayerMove()
+            return
+        }
         val kind = manip
         if (kind == M_LASSO) closeLasso() // al levantar el dedo el trazo se cierra solo
         manip = 0
@@ -1446,6 +1490,128 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         }
         if (kind == M_GMOVE || kind == M_GRESIZE || kind == M_GROT) clearGroupLift()
         resetTextGestures() // si no hubo movimiento, el arrastre del texto se abandona sin cambiar nada
+    }
+
+    // ---------- Mover capa ----------
+
+    /**
+     * Empieza a mover la capa seleccionada con un dedo: guarda de dónde se parte, los límites de sus trazos (no pueden salirse de la hoja) y
+     * el recuadro inicial de sus imágenes y textos. Los trazos se dibujan con una matriz (como en un grupo) y se fijan al soltar.
+     */
+    private fun beginLayerMove(e: MotionEvent) {
+        val pl = strokes?.page(index) ?: return
+        val ly = pl.layers[pl.selected]
+        if (!ly.isVisible) {
+            Toast.makeText(context, "La capa está oculta", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (ly.isLocked) {
+            Toast.makeText(context, "La capa está bloqueada", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (ly.canvas.isEmpty() && ly.items.isEmpty() && ly.texts.isEmpty()) return
+        val p = toPage(e.x, e.y) ?: return
+        selectItem(null) // no hay nada seleccionado mientras se mueve la capa
+        lmPre = snapNow()
+        lmX0 = p[0]
+        lmY0 = p[1]
+        lmItems.clear()
+        lmB0.clear()
+        for (im in ly.items) {
+            lmItems.add(im)
+            lmB0.add(RectF(im.bounds))
+        }
+        for (t in ly.texts) {
+            lmItems.add(t)
+            lmB0.add(RectF(t.bounds))
+        }
+        lmHasStrokes = ly.canvas.isNotEmpty()
+        if (lmHasStrokes) {
+            var x0 = Float.MAX_VALUE
+            var y0 = Float.MAX_VALUE
+            var x1 = -Float.MAX_VALUE
+            var y1 = -Float.MAX_VALUE
+            for (s in ly.canvas) {
+                val b = s.bbox()
+                if (b[0] < x0) x0 = b[0]
+                if (b[1] < y0) y0 = b[1]
+                if (b[2] > x1) x1 = b[2]
+                if (b[3] > y1) y1 = b[3]
+            }
+            lmMinX = x0
+            lmMinY = y0
+            lmMaxX = x1
+            lmMaxY = y1
+            gMat.reset()
+            single?.liftedSet = HashSet<Stroke>(ly.canvas)
+            single?.liftMatrix = gMat
+        }
+        mMoved = false
+        manip = M_LMOVE
+    }
+
+    private fun layerMove(e: MotionEvent) {
+        if (!mMoved && hypot(e.x - sx, e.y - sy) < touchSlop) return
+        val p = toPage(e.x, e.y) ?: return
+        mMoved = true
+        var dx = p[0] - lmX0
+        var dy = p[1] - lmY0
+        val sp = single?.spec
+        if (sp != null && lmHasStrokes) {
+            // Los trazos se guardan con coordenadas de 0 a 655 mm: la capa no se saca de la hoja (los trazos son los que mandan).
+            val loX = -lmMinX
+            val hiX = sp.wMm - lmMaxX
+            val loY = -lmMinY
+            val hiY = sp.hMm - lmMaxY
+            dx = if (loX <= hiX) dx.coerceIn(loX, hiX) else dx.coerceIn(hiX, loX)
+            dy = if (loY <= hiY) dy.coerceIn(loY, hiY) else dy.coerceIn(hiY, loY)
+        }
+        if (lmHasStrokes) gMat.setTranslate(dx, dy)
+        for (i in lmItems.indices) {
+            lmItems[i].bounds.set(lmB0[i])
+            lmItems[i].bounds.offset(dx, dy)
+        }
+        single?.invalidate()
+        invalidate()
+    }
+
+    /** Suelta la capa: los trazos se fijan en su nuevo lugar (mismo orden e identificador), todo se guarda y es UN paso del historial. */
+    private fun endLayerMove() {
+        manip = 0
+        val moved = mMoved
+        mMoved = false
+        val pl = strokes?.page(index)
+        if (moved && pl != null) {
+            val ly = pl.layers[pl.selected]
+            if (lmHasStrokes) {
+                val v = FloatArray(9)
+                gMat.getValues(v)
+                val tx = v[Matrix.MTRANS_X]
+                val ty = v[Matrix.MTRANS_Y]
+                for (i in ly.canvas.indices) {
+                    val s0 = ly.canvas[i]
+                    val p = s0.pts
+                    val out = FloatArray(p.size)
+                    var j = 0
+                    while (j < p.size) {
+                        out[j] = p[j] + tx
+                        out[j + 1] = p[j + 1] + ty
+                        out[j + 2] = p[j + 2]
+                        j += 3
+                    }
+                    ly.canvas[i] = Stroke(s0.type, s0.color, s0.widthMm, out, s0.opacity, s0.locked, s0.uid, s0.linkType, s0.linkData)
+                }
+            }
+            val pre = lmPre
+            if (pre != null) onRecord?.invoke(pre)
+            onChanged?.invoke(index) // se guardan los trazos y las capas (imágenes y textos)
+        }
+        clearGroupLift()
+        lmItems.clear()
+        lmB0.clear()
+        lmPre = null
+        single?.invalidate()
+        invalidate()
     }
 
     /** Abandona cualquier arrastre de tiradores de texto sin terminar (no cambia el estado del texto). */
@@ -2893,10 +3059,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
         }
         val stylus = e.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
-        val toolActive = tool != 0 && !continuous && single != null
-        val textTool = toolActive && tool == 6
-        val drawTool = toolActive && tool != 4 && tool != 6
-        val selTool = toolActive && tool == 4
+        val moveMode = layerMoveMode && !continuous && single != null
+        val toolActive = (tool != 0 || moveMode) && !continuous && single != null
+        val textTool = toolActive && !moveMode && tool == 6
+        val drawTool = toolActive && !moveMode && tool != 4 && tool != 6
+        val selTool = toolActive && !moveMode && tool == 4
         if (stylus) lastStylusT = e.eventTime
         // Sin herramienta el stylus no mueve la vista (queda reservado para dibujar).
         if (e.pointerCount == 1 && stylus && !toolActive) return false
@@ -2915,7 +3082,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 vel?.addMovement(e)
                 downTime = e.eventTime
                 startLinkHint(e)
-                if (drawTool) beginStroke(e, stylus) else if (selTool) beginSelect(e, stylus)
+                if (moveMode) beginLayerMove(e) else if (drawTool) beginStroke(e, stylus) else if (selTool) beginSelect(e, stylus)
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 if (e.pointerCount == 2) {
@@ -2948,7 +3115,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 vel?.addMovement(e)
                 vel?.computeCurrentVelocity(1000)
                 // Un toque corto y quieto sobre una imagen con enlace lo abre en vez de dibujar o mover la vista.
-                val tapLink = if (!multi && !continuous && (tool == 0 || tool == 1 || tool == 3) &&
+                val tapLink = if (!multi && !continuous && !moveMode && (tool == 0 || tool == 1 || tool == 3) &&
                     e.eventTime - downTime < 450 && hypot(e.x - sx, e.y - sy) < touchSlop
                 ) linkAt(e) else null
                 if (penDown && tapLink != null) discardStroke() else if (penDown) endStroke(e)
