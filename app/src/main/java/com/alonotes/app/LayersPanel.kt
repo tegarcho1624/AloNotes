@@ -18,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Toast
 import android.widget.SeekBar
+import android.widget.TextView
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -167,19 +168,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         touch.attachToRecyclerView(rv)
         center.addView(rv, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // Zona de fusión, justo encima de la opacidad
-        val ink = a.getColor(R.color.ink)
-        val line = View(a)
-        line.setBackgroundColor(a.getColor(R.color.ln))
-        center.addView(line, LinearLayout.LayoutParams(-1, dp(1)))
-        val blend = LinearLayout(a)
-        blend.gravity = Gravity.CENTER_VERTICAL
-        blend.setPadding(dp(4), 0, dp(8), 0)
-        blend.addView(UiKit.iconBtn(a, Icons.ARROW_DOWN_LINE, ink, 36, 20) { UiKit.soon(a) }, UiKit.box(a, 36))
-        blend.addView(UiKit.iconBtn(a, Icons.LOCK, ink, 36, 16) { UiKit.soon(a) }, UiKit.box(a, 36))
-        center.addView(blend, LinearLayout.LayoutParams(-1, dp(42)))
-
-        // Opacidad (solo visual por ahora)
+        // Opacidad (solo visual por ahora). Encima de ella estaban los íconos Recorte y Bloqueo alfa: se quitaron con su franja.
         val line2 = View(a)
         line2.setBackgroundColor(a.getColor(R.color.ln))
         center.addView(line2, LinearLayout.LayoutParams(-1, dp(1)))
@@ -230,7 +219,11 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
 
     // ---------- Lista (RecyclerView) y reordenar con el ícono ≡ ----------
 
-    /** La lista se muestra al revés: la capa más alta del modelo (la que se dibuja encima) va arriba. */
+    /**
+     * La lista se muestra al revés: la capa más alta del modelo (la que se dibuja encima) va arriba. El nombre que se ve es solo el número
+     * de su posición: la de más abajo (índice 0, la primera en dibujarse) es la 1 y la de arriba la más alta. Se calcula siempre a partir
+     * del índice en el modelo, así que al crear, borrar o reordenar capas la numeración queda consecutiva sin saltos.
+     */
     private inner class LayerAdapter : RecyclerView.Adapter<LayerVH>() {
         override fun getItemCount(): Int = model?.layers?.size ?: 0
 
@@ -248,7 +241,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             f.removeAllViews()
             f.alpha = 1f
             f.addView(
-                row(ly, idx == m.selected, { idxOf(h).let { i -> if (i >= 0) select(i) } }, {
+                row(ly, idx + 1, idx == m.selected, { idxOf(h).let { i -> if (i >= 0) select(i) } }, {
                     dragPre = model?.snapshot() // la hoja antes de reordenar
                     touch.startDrag(h)
                 }),
@@ -275,6 +268,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             if (from == RecyclerView.NO_POSITION || to == RecyclerView.NO_POSITION) return false
             m.move(m.layers.size - 1 - from, m.layers.size - 1 - to)
             adapter.notifyItemMoved(from, to)
+            refreshNumbers() // los números siguen al orden mientras se arrastra
             moved = true
             return true
         }
@@ -328,7 +322,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
             onLayersChanged?.invoke(true)
         }
         if (ly.canvas.isEmpty()) go()
-        else UiKit.confirm(a, "¿Eliminar «" + ly.name + "» y sus trazos?", "Eliminar") { go() }
+        else UiKit.confirm(a, "¿Eliminar la capa " + (m.selected + 1) + " y sus trazos?", "Eliminar") { go() }
     }
 
     private fun toggleVisible(ly: Layer) {
@@ -339,7 +333,24 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         onVisibilityChanged?.invoke()
     }
 
-    private fun row(ly: Layer, selected: Boolean, onSelect: () -> Unit, onHandle: () -> Unit): View {
+    /** Número que se muestra de la capa [ly]: su posición en el modelo + 1 (la de abajo es la 1). */
+    private fun numberOf(ly: Layer): Int {
+        val m = model ?: return 0
+        for (i in m.layers.indices) if (m.layers[i] === ly) return i + 1
+        return 0
+    }
+
+    /** Vuelve a poner el número de cada fila visible según el orden actual del modelo (sin rehacer las filas). */
+    private fun refreshNumbers() {
+        for (i in 0 until rv.childCount) {
+            val f = rv.getChildAt(i) as? FrameLayout ?: continue
+            val tv = f.getChildAt(0)?.tag as? TextView ?: continue
+            val ly = tv.tag as? Layer ?: continue
+            tv.text = numberOf(ly).toString()
+        }
+    }
+
+    private fun row(ly: Layer, number: Int, selected: Boolean, onSelect: () -> Unit, onHandle: () -> Unit): View {
         val ink = a.getColor(R.color.ink)
         val r = LinearLayout(a)
         r.gravity = Gravity.CENTER_VERTICAL
@@ -356,7 +367,10 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         r.addView(eye, ep)
         val tp = LinearLayout.LayoutParams(0, -2, 1f)
         tp.leftMargin = dp(4)
-        r.addView(UiKit.text(a, ly.name, 15, if (ly.isVisible) ink else a.getColor(R.color.mut)), tp)
+        val nameTv = UiKit.text(a, number.toString(), 15, if (ly.isVisible) ink else a.getColor(R.color.mut))
+        nameTv.tag = ly // para refreshNumbers
+        r.tag = nameTv
+        r.addView(nameTv, tp)
         // Asa de arrastre (≡): al tocarla empieza el arrastre de esta fila.
         val handle = UiKit.iconBtn(a, Icons.MENU, ink, 36, 20)
         handle.setOnTouchListener { _, e ->

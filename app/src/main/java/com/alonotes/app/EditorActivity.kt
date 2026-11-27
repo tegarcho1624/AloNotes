@@ -270,7 +270,9 @@ class EditorActivity : Activity() {
             toggleView()
         }
         bar.addView(eye, UiKit.box(this, 44))
-        bar.addView(tb(Icons.LOCK, ink) { UiKit.soon(this) }, UiKit.box(this, 44))
+        // Antes aquí estaba el candado (sin función). Se deja un hueco invisible del mismo ancho para que el ojo y el resto de la barra
+        // queden exactamente donde estaban (el espaciador de la izquierda absorbería ese ancho y movería todo lo demás).
+        bar.addView(View(this), UiKit.box(this, 44))
         // Deshacer / rehacer: en gris cuando no hay nada que deshacer o rehacer (y en la vista continua)
         val canU = history.canUndo && !cont
         val canR = history.canRedo && !cont

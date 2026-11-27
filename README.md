@@ -395,6 +395,15 @@ el ícono del launcher (color fijo).
   a ancho fijo y se reacomoda) y arriba y abajo cambian el alto del recuadro (nunca menos que el del texto; también pasa a ancho fijo). `PageViewport.startManip` avisa al texto qué se arrastra (`beginGesture`: `G_CORNER`,
   `G_SIDE`, `G_VERT` o `G_NONE`) y al soltar `endGesture()` pasa lo hecho a sus datos; los textos de un grupo se escalan con él. Imágenes, trazos y formas usan el mismo código de siempre.
 
+## Limpieza de barra y panel de capas, y numeración de capas (v0.29.0)
+- **Barra superior:** se quitó el candado (no tenía función). En su lugar queda un hueco invisible del mismo ancho (44 dp): si no, el espaciador de la izquierda lo absorbería y el ojo (y lo que va a su derecha)
+  se movería. El ojo y el resto de la barra quedan exactamente donde estaban.
+- **Panel de capas (`LayersPanel`):** se quitaron los íconos Recorte y Bloqueo alfa y la franja que los contenía (con su línea); la opacidad (100%) queda igual.
+- **Nombres:** la lista ya no muestra `Layer.name` ("Capa N", que sigue guardado igual) sino solo el número de la posición: la capa de más abajo (índice 0, la primera en dibujarse) es la 1 y la de arriba la más alta
+  (`numberOf`: índice en el modelo + 1; la lista se muestra al revés). Se recalcula siempre desde el índice, así que al crear, borrar o reordenar no hay saltos (si se borra la 2, la 3 pasa a ser la 2). Al arrastrar,
+  `refreshNumbers()` actualiza los números de las filas visibles sin rehacerlas; al agregar, borrar o deshacer se rehace la lista. El diálogo de borrar dice "la capa N". El orden de dibujo no cambió: el índice 0 se
+  dibuja primero y arrastrar sigue moviendo la capa en el modelo (`PageLayers.move`), así que el Z-index coincide con la numeración.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.
