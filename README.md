@@ -381,6 +381,20 @@ el ícono del launcher (color fijo).
 - **Guardado:** `TextDto` (layers/<idNota>.json) ahora guarda también `fh`, `fv`, `lt`, `ld` (con valores por defecto: los archivos de la versión anterior cargan igual); `TextSnap` (historial) y
   `ClipText` (copiar hoja) igual. Todo cambio (copiar, pegar, mover, voltear, opacidad, bloquear, enlace, orden) es UN paso de deshacer/rehacer y se guarda con las capas.
 
+## Maquetación del texto: ancho fijo, espaciado, alineado, altura y tiradores laterales (v0.28.0)
+- **Modelo (`TextItem`):** nuevas propiedades `isFixedWidth` (false), `letterSpacing` (0 a 0,5 em), `textAlign` (0 izquierda, 1 centro, 2 derecha) y `lineHeight` (0,2 a 2). Se guardan en el JSON de capas
+  (`TextDto`: `fw`, `ls`, `ta`, `lh`, con valores por defecto: los archivos anteriores cargan igual), en el historial (`TextSnap`) y en los dos portapapeles (`ClipText`, `ClipTextObj`).
+- **Dibujo:** ya no es `drawText`: `TextItem` arma un `StaticLayout` (a 50 px por mm, dibujado reducido; se reutiliza mientras no cambie nada) con salto de línea, alineado, `letterSpacing` y altura de línea
+  (`setLineSpacing(0, lineHeight)`, sin relleno de fuente). Sin ancho fijo: una línea y el recuadro se adapta solo al texto (`refit`). Con ancho fijo: el ancho del recuadro es el que se le dio, el texto salta de
+  línea al llegar a su borde derecho y el alto es el del texto (o uno mayor si se arrastró un tirador de arriba o de abajo; el texto queda arriba). El recuadro cubre las letras aunque la altura de línea sea menor que 1.
+  Todo ajuste del recuadro conserva su esquina superior izquierda (con el giro). Al editar un texto de ancho fijo, el cuadro de escritura tiene su ancho y salta de línea igual (Enter sigue terminando).
+- **Menú de 3 puntos del texto** (después de Opacidad y antes de Bloquear): *Fix width / Unfix width* (alterna `isFixedWidth`; íconos `FIX_ON` = flechas hacia afuera con topes, `FIX_OFF` = flecha doble normal),
+  *Espaciado* (mini panel con SeekBar 0,00 a 0,50), *Alineado* (tres íconos: izquierda, centro, derecha; el actual resaltado) y *Altura* (SeekBar 0,20 a 2,00). Los controles cambian el texto en tiempo real y cada
+  vez que se abre un panel cuenta como UN paso del historial; todo se guarda con las capas. El alineado se nota con varias líneas (ancho fijo).
+- **Tiradores:** el texto ya tiene los 8: las esquinas escalan (cambian el tamaño de la letra y, si el ancho es fijo, el ancho y el alto reservado en la misma proporción), izquierda y derecha cambian el ancho (el texto pasa
+  a ancho fijo y se reacomoda) y arriba y abajo cambian el alto del recuadro (nunca menos que el del texto; también pasa a ancho fijo). `PageViewport.startManip` avisa al texto qué se arrastra (`beginGesture`: `G_CORNER`,
+  `G_SIDE`, `G_VERT` o `G_NONE`) y al soltar `endGesture()` pasa lo hecho a sus datos; los textos de un grupo se escalan con él. Imágenes, trazos y formas usan el mismo código de siempre.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

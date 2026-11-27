@@ -50,7 +50,11 @@ internal class ClipTextObj(
     val fh: Boolean,
     val fv: Boolean,
     val linkType: Int,
-    val linkData: String
+    val linkData: String,
+    val fixedWidth: Boolean,
+    val letterSpacing: Float,
+    val textAlign: Int,
+    val lineHeight: Float
 )
 
 /** Lo que crea un pegado: las imágenes, los trazos y los textos nuevos (para ponerlos en la capa). */
@@ -116,7 +120,8 @@ internal object ObjectClipboard {
                 outTexts.add(
                     ClipTextObj(
                         b.centerX() - gx, b.centerY() - gy, b.width(), b.height(), it.rotation, it.text, it.fontSize, it.fontFamily,
-                        it.isItalic, it.isBold, it.isUnderline, it.color, it.opacity, it.isFlippedH, it.isFlippedV, it.linkType, it.linkData
+                        it.isItalic, it.isBold, it.isUnderline, it.color, it.opacity, it.isFlippedH, it.isFlippedV, it.linkType, it.linkData,
+                        it.isFixedWidth, it.letterSpacing, it.textAlign, it.lineHeight
                     )
                 )
             }
@@ -230,7 +235,7 @@ internal object ObjectClipboard {
                 TextItem(
                     UUID.randomUUID().toString(), to.text, to.size, to.family, to.italic, to.bold, to.underline, to.color,
                     RectF(mx - to.w / 2f, my - to.h / 2f, mx + to.w / 2f, my + to.h / 2f), to.rot, to.opacity, false,
-                    to.fh, to.fv, to.linkType, to.linkData
+                    to.fh, to.fv, to.linkType, to.linkData, to.fixedWidth, to.letterSpacing, to.textAlign, to.lineHeight
                 )
             )
         }

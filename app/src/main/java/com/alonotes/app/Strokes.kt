@@ -286,7 +286,8 @@ internal class PageLayers(first: List<Stroke>? = null) {
                 val ti = TextItem(
                     dto.id, dto.text, dto.size.coerceIn(TextItem.MIN_SIZE, TextItem.MAX_SIZE), dto.family, dto.italic, dto.bold,
                     dto.underline, dto.color, RectF(dto.l, dto.t, dto.r, dto.b), dto.rot, dto.op.coerceIn(0f, 1f), dto.lk,
-                    dto.fh, dto.fv, dto.lt, dto.ld
+                    dto.fh, dto.fv, dto.lt, dto.ld, dto.fw, dto.ls.coerceIn(TextItem.MIN_SPACING, TextItem.MAX_SPACING),
+                    dto.ta.coerceIn(0, 2), dto.lh.coerceIn(TextItem.MIN_LINE, TextItem.MAX_LINE)
                 )
                 ti.refit() // el recuadro vuelve al tamaño natural (por si la fuente cambió)
                 l.texts.add(ti)
@@ -326,7 +327,8 @@ internal class PageLayers(first: List<Stroke>? = null) {
                     TextSnap(
                         t.id, t.text, t.fontSize, t.fontFamily, t.isItalic, t.isBold, t.isUnderline, t.color,
                         t.bounds.left, t.bounds.top, t.bounds.right, t.bounds.bottom, t.rotation, t.opacity, t.isLocked,
-                        t.isFlippedH, t.isFlippedV, t.linkType, t.linkData
+                        t.isFlippedH, t.isFlippedV, t.linkType, t.linkData,
+                        t.isFixedWidth, t.letterSpacing, t.textAlign, t.lineHeight
                     )
                 }
             )
@@ -352,7 +354,7 @@ internal class PageLayers(first: List<Stroke>? = null) {
                 ly.texts.add(
                     TextItem(
                         ts.id, ts.text, ts.size, ts.family, ts.italic, ts.bold, ts.underline, ts.color,
-                        RectF(ts.l, ts.t, ts.r, ts.b), ts.rot, ts.op, ts.lk, ts.fh, ts.fv, ts.lt, ts.ld
+                        RectF(ts.l, ts.t, ts.r, ts.b), ts.rot, ts.op, ts.lk, ts.fh, ts.fv, ts.lt, ts.ld, ts.fw, ts.ls, ts.ta, ts.lh
                     )
                 )
             }

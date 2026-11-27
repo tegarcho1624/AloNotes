@@ -42,7 +42,11 @@ internal class ClipText(
     val fh: Boolean = false,
     val fv: Boolean = false,
     val lt: Int = 0,
-    val ld: String = ""
+    val ld: String = "",
+    val fw: Boolean = false,
+    val ls: Float = 0f,
+    val ta: Int = 0,
+    val lh: Float = 1f
 )
 
 internal class ClipLayer(
@@ -102,7 +106,8 @@ internal object PageClipboard {
                     ClipText(
                         t.text, t.fontSize, t.fontFamily, t.isItalic, t.isBold, t.isUnderline, t.color,
                         t.bounds.left, t.bounds.top, t.bounds.right, t.bounds.bottom, t.rotation, t.opacity, t.isLocked,
-                        t.isFlippedH, t.isFlippedV, t.linkType, t.linkData
+                        t.isFlippedH, t.isFlippedV, t.linkType, t.linkData,
+                        t.isFixedWidth, t.letterSpacing, t.textAlign, t.lineHeight
                     )
                 }
                 layers.add(ClipLayer(ly.name, ly.isVisible, ly.opacity, strokes, imgs, texts))
@@ -146,7 +151,8 @@ internal object PageClipboard {
                     ly.texts.add(
                         TextItem(
                             UUID.randomUUID().toString(), ct.text, ct.size, ct.family, ct.italic, ct.bold, ct.underline, ct.color,
-                            RectF(ct.l, ct.t, ct.r, ct.b), ct.rot, ct.op, ct.lk, ct.fh, ct.fv, ct.lt, ct.ld
+                            RectF(ct.l, ct.t, ct.r, ct.b), ct.rot, ct.op, ct.lk, ct.fh, ct.fv, ct.lt, ct.ld,
+                            ct.fw, ct.ls, ct.ta, ct.lh
                         )
                     )
                 }

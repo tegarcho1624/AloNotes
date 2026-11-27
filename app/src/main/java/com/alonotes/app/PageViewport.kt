@@ -195,6 +195,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private var editAx = 0f
     private var editAy = 0f
     private var editRot = 0f
+    private var editTopLeft = false // true: (editAx, editAy) es la esquina superior izquierda del recuadro (texto existente)
     private var editColor = 0
     private var swallowTouch = false
 
@@ -344,6 +345,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Selecciona [items] (de la hoja actual): ninguno, uno (selección normal) o varios (recuadro de grupo). */
     fun setSelection(items: List<SelectableItem>) {
+        resetTextGestures()
         cancelCrop()
         clearGroupLift()
         manip = 0
@@ -428,6 +430,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     /** Sale de los modos de recorte y suelta cualquier gesto, sin cambios (antes de deshacer o rehacer). */
     fun cancelModes() {
         finishText()
+        resetTextGestures()
         cancelCrop()
         clearGroupLift()
         manip = 0
@@ -440,6 +443,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     /** Selecciona un elemento de la hoja actual (null = quitar la selección). */
     fun selectItem(item: SelectableItem?) {
+        resetTextGestures()
         cancelCrop()
         clearGroupLift()
         multiSel.clear()
@@ -1028,16 +1032,19 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             // Se edita con su propio estilo: la barra lo muestra y lo que se cambie en ella se aplica a este texto.
             TextStore.setAll(c, item.fontSize, item.fontFamily, item.isItalic, item.isBold, item.isUnderline)
             editColor = item.color
+            // Texto existente: el cuadro empieza en la esquina superior izquierda de su recuadro (puede tener varias líneas)
             val b = item.bounds
-            val an = Xf.toPage(b.centerX(), b.centerY(), item.rotation, -b.width() / 2f, 0f)
+            val an = Xf.toPage(b.centerX(), b.centerY(), item.rotation, -b.width() / 2f, -b.height() / 2f)
             editAx = an[0]
             editAy = an[1]
             editRot = item.rotation
+            editTopLeft = true
         } else {
             editColor = PenStore.colors(c)[PenStore.colorIdx(c)]
             editAx = x
             editAy = y
             editRot = 0f
+            editTopLeft = false
         }
         editItem = item
         single?.hiddenText = item
@@ -1052,7 +1059,15 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         et.elevation = dp(10).toFloat()
         et.alpha = 1f
         et.visibility = View.VISIBLE
-        et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS // una sola línea: Enter termina
+        if (item != null && item.isFixedWidth) {
+            // Ancho fijo: el cuadro tiene el ancho del recuadro y salta de línea como el texto final; Enter sigue terminando.
+            et.isSingleLine = false
+            et.setHorizontallyScrolling(false)
+            et.maxLines = Int.MAX_VALUE
+            et.setRawInputType(InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS)
+        } else {
+            et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS // una sola línea: Enter termina
+        }
         et.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI
         et.setOnEditorActionListener { _, actionId, ev ->
             val enter = ev != null && ev.keyCode == KeyEvent.KEYCODE_ENTER && ev.action == KeyEvent.ACTION_DOWN
@@ -1098,13 +1113,25 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         et.setTextColor(editColor or 0xFF000000.toInt())
         et.paintFlags = if (TextStore.underline(c)) et.paintFlags or Paint.UNDERLINE_TEXT_FLAG
         else et.paintFlags and Paint.UNDERLINE_TEXT_FLAG.inv()
+        // Espaciado, altura de línea y alineado del texto que se edita (uno nuevo lleva los de siempre)
+        val ed = editItem
+        et.letterSpacing = (ed?.letterSpacing ?: 0f).coerceIn(TextItem.MIN_SPACING, TextItem.MAX_SPACING)
+        et.setLineSpacing(0f, (ed?.lineHeight ?: 1f).coerceIn(TextItem.MIN_LINE, TextItem.MAX_LINE))
+        et.gravity = Gravity.TOP or when (ed?.textAlign ?: 0) {
+            1 -> Gravity.CENTER_HORIZONTAL
+            2 -> Gravity.END
+            else -> Gravity.START
+        }
         et.minWidth = dp(4)
         val lp = et.layoutParams as FrameLayout.LayoutParams
+        // Ancho fijo: el del recuadro; si no, el del texto que se escribe
+        lp.width = if (ed != null && ed.isFixedWidth) (ed.bounds.width() * pxMm).roundToInt().coerceAtLeast(dp(8))
+        else FrameLayout.LayoutParams.WRAP_CONTENT
         lp.leftMargin = p0[0].roundToInt()
-        lp.topMargin = (p0[1] - h / 2f).roundToInt()
+        lp.topMargin = (if (editTopLeft) p0[1] else p0[1] - h / 2f).roundToInt()
         et.layoutParams = lp
         et.pivotX = 0f
-        et.pivotY = h / 2f
+        et.pivotY = if (editTopLeft) 0f else h / 2f
         et.rotation = ang + editRot
     }
 
@@ -1165,7 +1192,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 item.isBold = TextStore.bold(c)
                 item.isUnderline = TextStore.underline(c)
                 item.color = color
-                item.placeLeftCenter(editAx, editAy)
+                item.placeTopLeft(editAx, editAy) // conserva la esquina superior izquierda
                 onRecord?.invoke(pre)
                 changed = true
             }
@@ -1301,9 +1328,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 if (sel.hit(p[0], p[1])) return
             } else {
                 val pts = handlePts(sel)
-                var h = if (pts != null) hitHandle(pts, e.x, e.y) else -1
-                // Un texto solo se redimensiona por las esquinas (conserva su proporción: cambia el tamaño de la letra).
-                if (sel is TextItem && h in 0..7 && (HX[h] == 0 || HY[h] == 0)) h = -1
+                val h = if (pts != null) hitHandle(pts, e.x, e.y) else -1
                 if (h >= 0) {
                     startManip(sel, if (h == 8) M_ROTATE else M_RESIZE, h, p)
                     return
@@ -1326,6 +1351,13 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
     private fun startManip(item: SelectableItem, kind: Int, handle: Int, p: FloatArray) {
         manipPre = snapNow()
         (item as? StrokeItem)?.beginGesture()
+        // Texto: las esquinas escalan la letra, los lados izquierdo y derecho cambian el ancho y los de arriba y abajo el alto.
+        (item as? TextItem)?.beginGesture(
+            if (kind != M_RESIZE) TextItem.G_NONE
+            else if (HX[handle] != 0 && HY[handle] != 0) TextItem.G_CORNER
+            else if (HY[handle] == 0) TextItem.G_SIDE
+            else TextItem.G_VERT
+        )
         manip = kind
         mHandle = handle
         mP0x = p[0]
@@ -1398,9 +1430,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                     if (pre != null) onRecord?.invoke(pre)
                 }
                 manipPre = null
-                // el cambio de escala pasa al tamaño de la letra (un texto suelto o los de un grupo)
-                if (one) (selItem as? TextItem)?.bakeScale()
-                if (grp) for (m in multiSel) if (m is TextItem) m.bakeScale()
+                // lo arrastrado pasa a los datos del texto (tamaño de letra, ancho fijo o alto), suelto o en un grupo
+                if (one) (selItem as? TextItem)?.endGesture()
+                if (grp) for (m in multiSel) if (m is TextItem) m.endGesture()
                 val st = selItem as? StrokeItem
                 if (st != null && one) {
                     commitStroke(st) // los puntos quedan transformados y se guardan con el archivo de trazos
@@ -1413,6 +1445,13 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             }
         }
         if (kind == M_GMOVE || kind == M_GRESIZE || kind == M_GROT) clearGroupLift()
+        resetTextGestures() // si no hubo movimiento, el arrastre del texto se abandona sin cambiar nada
+    }
+
+    /** Abandona cualquier arrastre de tiradores de texto sin terminar (no cambia el estado del texto). */
+    private fun resetTextGestures() {
+        (selItem as? TextItem)?.cancelGesture()
+        for (m in multiSel) if (m is TextItem) m.cancelGesture()
     }
 
     /** Cambia el trazo [st] por [out] en el mismo lugar de su capa y hace de [out] el trazo del elemento. */
@@ -1494,6 +1533,8 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         for (im in multiSel) gStart.add(floatArrayOf(im.bounds.left, im.bounds.top, im.bounds.right, im.bounds.bottom, im.rotation))
         mAng0 = Xf.angleDeg(p[0] - gB0.centerX(), p[1] - gB0.centerY())
         mMoved = false
+        // Los textos de un grupo se escalan con él (al soltar, el cambio de escala pasa al tamaño de su letra)
+        for (m in multiSel) if (m is TextItem) m.beginGesture(TextItem.G_CORNER)
         // Los trazos del grupo no recalculan sus puntos en cada movimiento: la hoja los dibuja con una sola matriz (gMat);
         // al soltar se fijan (bakeGroupStrokes). Las imágenes siguen como antes.
         val set = HashSet<Stroke>()
@@ -2235,12 +2276,26 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         col.setPadding(dp(4), dp(4), dp(4), dp(4))
         col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
         val acts = if (selItem is TextItem) {
-            // Texto: enlace, voltear, opacidad y bloquear (sin recortes: son de imágenes)
+            // Texto: enlace, voltear, opacidad, maquetación (ancho fijo, espaciado, alineado, altura de línea) y bloquear.
+            // Sin recortes: son de imágenes.
+            val fixed = (selItem as? TextItem)?.isFixedWidth == true
             listOf(
                 MenuAct(Icons.LINK, "Enlace", 0f) { (selItem as? Linkable)?.let { onEditLink?.invoke(it) } },
                 MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
                 MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
                 MenuAct(Icons.OPACITY, "Opacidad", 0f) { showOpacity(anchor) },
+                MenuAct(if (fixed) Icons.FIX_ON else Icons.FIX_OFF, if (fixed) "Unfix width" else "Fix width", 0f) { toggleFixedWidth() },
+                MenuAct(Icons.SPACING, "Espaciado", 0f) {
+                    showTextSlider(anchor, "Espaciado", TextItem.MIN_SPACING, TextItem.MAX_SPACING, { it.letterSpacing }) { t, v ->
+                        t.letterSpacing = v
+                    }
+                },
+                MenuAct(Icons.ALIGN_L, "Alineado", 0f) { showTextAlign(anchor) },
+                MenuAct(Icons.LINE_H, "Altura", 0f) {
+                    showTextSlider(anchor, "Altura", TextItem.MIN_LINE, TextItem.MAX_LINE, { it.lineHeight }) { t, v ->
+                        t.lineHeight = v
+                    }
+                },
                 MenuAct(Icons.LOCK, "Bloquear objeto", 0f) { setLocked(true) }
             )
         } else if (selItem is StrokeItem) {
@@ -2357,6 +2412,119 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         replaceStroke(item, item.src.copyWith(linkType = type, linkData = data))
         single?.invalidate()
         invalidate()
+    }
+
+    /**
+     * Fix width / Unfix width: alterna el ancho fijo del texto seleccionado (un paso del historial). Con ancho fijo el recuadro
+     * conserva su ancho actual y el texto salta de línea al llegar a su borde derecho; sin él vuelve a una línea y el recuadro se
+     * adapta al texto. La esquina superior izquierda no se mueve.
+     */
+    private fun toggleFixedWidth() {
+        val t = selItem as? TextItem ?: return
+        val pre = snapNow()
+        t.isFixedWidth = !t.isFixedWidth
+        t.refit()
+        single?.invalidate()
+        updateMore()
+        invalidate()
+        onItemsChanged?.invoke()
+        if (pre != null) onRecord?.invoke(pre)
+    }
+
+    /**
+     * Mini panel con un SeekBar para un número del texto seleccionado (espaciado de letras o altura de línea; dos decimales). El
+     * texto cambia en tiempo real (y su recuadro: [apply] cambia el dato y aquí se reajusta); se guarda al soltar o al cerrar el
+     * panel y cada vez que se abre cuenta como UN paso del historial.
+     */
+    private fun showTextSlider(anchor: View, title: String, min: Float, max: Float, current: (TextItem) -> Float, apply: (TextItem, Float) -> Unit) {
+        val item = selItem as? TextItem ?: return
+        val ctx = context
+        val ink = ctx.getColor(R.color.ink)
+        val acc = ThemeUtils.accent(ctx)
+        val col = LinearLayout(ctx)
+        col.orientation = LinearLayout.VERTICAL
+        col.setPadding(dp(16), dp(12), dp(16), dp(12))
+        col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
+        val start = ((current(item) - min) * 100f).roundToInt().coerceIn(0, ((max - min) * 100f).roundToInt())
+        fun fmt(p: Int) = title + ": " + String.format("%.2f", min + p / 100f)
+        val label = UiKit.text(ctx, fmt(start), 15, ink)
+        col.addView(label)
+        val seek = SeekBar(ctx)
+        seek.max = ((max - min) * 100f).roundToInt()
+        seek.progress = start
+        seek.progressTintList = ColorStateList.valueOf(acc)
+        seek.thumbTintList = ColorStateList.valueOf(acc)
+        seek.progressBackgroundTintList = ColorStateList.valueOf(ctx.getColor(R.color.ln2))
+        val sp = LinearLayout.LayoutParams(dp(220), -2)
+        sp.topMargin = dp(6)
+        col.addView(seek, sp)
+        var dirty = false
+        val pre = snapNow() // la hoja antes de tocar el valor
+        var recorded = false
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
+                label.text = fmt(p)
+                if (fromUser) {
+                    if (!recorded && pre != null) {
+                        recorded = true
+                        onRecord?.invoke(pre) // una sola entrada en el historial por cada vez que se abre el panel
+                    }
+                    apply(item, min + p / 100f)
+                    item.refit()
+                    dirty = true
+                    single?.invalidate() // se ve al instante
+                    updateMore()
+                }
+            }
+
+            override fun onStartTrackingTouch(sb: SeekBar) {}
+
+            override fun onStopTrackingTouch(sb: SeekBar) {
+                if (dirty) {
+                    dirty = false
+                    onItemsChanged?.invoke()
+                }
+            }
+        })
+        val pw = makePopup(col) {
+            if (dirty) {
+                dirty = false
+                onItemsChanged?.invoke()
+            }
+        }
+        placeBeside(pw, anchor, col.measuredWidth, col.measuredHeight)
+    }
+
+    /**
+     * Alineado del texto seleccionado: tres íconos (izquierda, centro, derecha; el actual resaltado). Elegir uno lo aplica, lo guarda
+     * y es un paso del historial. Se nota cuando el texto tiene varias líneas (ancho fijo).
+     */
+    private fun showTextAlign(anchor: View) {
+        val t = selItem as? TextItem ?: return
+        val ctx = context
+        val ink = ctx.getColor(R.color.ink)
+        val row = LinearLayout(ctx)
+        row.orientation = LinearLayout.HORIZONTAL
+        row.setPadding(dp(4), dp(4), dp(4), dp(4))
+        row.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
+        val icons = intArrayOf(Icons.ALIGN_L, Icons.ALIGN_C, Icons.ALIGN_R)
+        for (i in 0..2) {
+            val b = UiKit.iconBtn(ctx, icons[i], ink, 44, 22) {
+                dismissMenu()
+                if (t.textAlign != i) {
+                    val pre = snapNow()
+                    t.textAlign = i
+                    single?.invalidate()
+                    invalidate()
+                    onItemsChanged?.invoke()
+                    if (pre != null) onRecord?.invoke(pre)
+                }
+            }
+            if (t.textAlign == i) UiKit.ripple(ctx, b, 12, ThemeUtils.accentBg(ctx))
+            row.addView(b, LinearLayout.LayoutParams(dp(44), dp(44)))
+        }
+        val pw = makePopup(row) {}
+        placeBeside(pw, anchor, row.measuredWidth, row.measuredHeight)
     }
 
     /**
@@ -2528,7 +2696,6 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         }
         c.drawLine(pts[2], pts[3], pts[16], pts[17], ovStroke)
         for (i in 0 until 8) {
-            if (item is TextItem && (HX[i] == 0 || HY[i] == 0)) continue
             ovFill.color = ink
             c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovFill)
             c.drawCircle(pts[i * 2], pts[i * 2 + 1], 6f * d, ovStroke)

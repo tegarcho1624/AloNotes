@@ -6,12 +6,16 @@ import android.graphics.Bitmap.CompressFormat
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.text.Layout
+import android.text.StaticLayout
+import android.text.TextPaint
 import android.os.Handler
 import android.os.Looper
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -209,11 +213,19 @@ internal class ImageItem(
 }
 
 /**
- * Texto de una sola línea colocado en una hoja. Todo en mm de la hoja. El tamaño ([fontSize]) está en "unidades de texto":
- * 1 unidad = [MM_PER_UNIT] mm (tamaño 40 = letra de 8 mm). [bounds] (sin rotar; su centro es el pivote del giro) es el tamaño NATURAL
- * del texto con su fuente y estilo, salvo mientras se redimensiona: entonces el texto se dibuja ajustado al recuadro y al soltar
- * [bakeScale] pasa el cambio de escala al tamaño de la letra. [x] e [y] son el centro del recuadro.
- * [fontFamily] es un id de FontManager ("sys:...", "asset:...", "file:...").
+ * Texto colocado en una hoja. Todo en mm de la hoja. El tamaño ([fontSize]) está en "unidades de texto": 1 unidad = [MM_PER_UNIT] mm
+ * (tamaño 40 = letra de 8 mm). Se dibuja con un StaticLayout (salto de línea, alineado, espaciado de letras y altura de línea).
+ *
+ * El recuadro [bounds] (sin rotar; su centro es el pivote del giro) sigue al texto:
+ *  - [isFixedWidth] = false: una sola línea; el recuadro crece o se encoge solo para adaptarse al texto.
+ *  - [isFixedWidth] = true: el ancho del recuadro es el que se le dio y el texto salta de línea al llegar al borde derecho; el alto es
+ *    el del texto, o uno mayor si se arrastró un tirador de arriba o de abajo (el texto queda arriba).
+ * [letterSpacing] (0 a 0,5, en "em"), [textAlign] (0 izquierda, 1 centro, 2 derecha) y [lineHeight] (0,2 a 2, multiplicador).
+ * [x] e [y] son el centro del recuadro. [fontFamily] es un id de FontManager ("sys:...", "asset:...", "file:...").
+ *
+ * Tiradores: las esquinas escalan el texto (cambian el tamaño de la letra y, si el ancho es fijo, el ancho en la misma proporción);
+ * los de izquierda y derecha cambian el ancho (el texto pasa a ancho fijo y se reacomoda); los de arriba y abajo cambian el alto.
+ * Mientras dura el arrastre ([beginGesture]) el dibujo sigue al dedo y al soltar ([endGesture]) se pasa a los datos del texto.
  */
 internal class TextItem(
     override val id: String,
@@ -231,13 +243,28 @@ internal class TextItem(
     override var isFlippedH: Boolean = false,
     override var isFlippedV: Boolean = false,
     override var linkType: Int = ImageItem.LINK_NONE,
-    override var linkData: String = ""
+    override var linkData: String = "",
+    var isFixedWidth: Boolean = false,
+    var letterSpacing: Float = 0f,
+    var textAlign: Int = 0,
+    var lineHeight: Float = 1f
 ) : SelectableItem, Linkable {
     companion object {
         const val MM_PER_UNIT = 0.2f
         const val MIN_SIZE = 8f
         const val MAX_SIZE = 200f
-        private const val K = 50f // la medida se toma a 50x para no perder precisión con letras chicas
+        const val MIN_SPACING = 0f
+        const val MAX_SPACING = 0.5f
+        const val MIN_LINE = 0.2f
+        const val MAX_LINE = 2f
+        private const val MIN_WIDTH_MM = 6f // ancho mínimo de un recuadro de ancho fijo
+        private const val K = 50f // el texto se mide y se arma a 50 px por mm (se dibuja reducido) para no perder precisión
+
+        // Qué se está arrastrando (ver beginGesture)
+        const val G_NONE = 0
+        const val G_CORNER = 1
+        const val G_SIDE = 2
+        const val G_VERT = 3
 
         private val styled = HashMap<String, Typeface>()
 
@@ -269,11 +296,23 @@ internal class TextItem(
         }
     }
 
-    /** Una copia sin opacidad, sin bloqueo y con su recuadro propio (para dibujarla aparte, por ejemplo en un sticker). */
-    fun plainCopy(): TextItem = TextItem(
-        id, text, fontSize, fontFamily, isItalic, isBold, isUnderline, color, RectF(bounds), rotation, 1f, false,
-        isFlippedH, isFlippedV
-    )
+    // Alto del recuadro cuando es mayor que el del texto (ancho fijo y se arrastró un tirador de arriba o de abajo); 0 = el del texto.
+    private var frameH = 0f
+
+    // Arrastre en curso: qué es y, si son las esquinas, el recuadro al empezar (el texto se dibuja escalado respecto a él).
+    private var gMode = G_NONE
+    private var scaleRef: RectF? = null
+
+    // Último StaticLayout armado (se reutiliza mientras no cambie nada: se dibuja en cada cuadro).
+    private var cacheKey: String? = null
+    private var cacheLayout: StaticLayout? = null
+
+    init {
+        if (isFixedWidth && bounds.width() > 0f && bounds.height() > 0f) {
+            val h = measure(bounds.width())[1]
+            if (bounds.height() > h + 0.05f) frameH = bounds.height()
+        }
+    }
 
     /** Centro del recuadro (mm de la hoja). */
     var x: Float
@@ -287,62 +326,171 @@ internal class TextItem(
             bounds.offset(0f, v - bounds.centerY())
         }
 
-    override val scale: Float get() = bounds.width() / natural()[0]
+    override val scale: Float get() = fontSize / TextStore.DEFAULT_SIZE
 
-    private fun paint(sizePx: Float): Paint {
-        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+    /** Una copia sin opacidad ni bloqueo y con su recuadro propio (para dibujarla aparte, por ejemplo en un sticker). */
+    fun plainCopy(): TextItem = TextItem(
+        id, text, fontSize, fontFamily, isItalic, isBold, isUnderline, color, RectF(bounds), rotation, 1f, false,
+        isFlippedH, isFlippedV, ImageItem.LINK_NONE, "", isFixedWidth, letterSpacing, textAlign, lineHeight
+    )
+
+    // ---------- Maquetación ----------
+
+    private fun textPaint(sizePx: Float): TextPaint {
+        val p = TextPaint(Paint.ANTI_ALIAS_FLAG)
         p.typeface = typeface(fontFamily, isBold, isItalic)
         p.textSize = sizePx
+        p.letterSpacing = letterSpacing.coerceIn(MIN_SPACING, MAX_SPACING)
+        p.color = color
+        p.isUnderlineText = isUnderline
         return p
     }
 
-    /** Tamaño natural del texto en mm: [ancho, alto, ascenso]. */
-    fun natural(): FloatArray {
-        val p = paint(fontSize * MM_PER_UNIT * K)
-        val fm = p.fontMetrics
-        return floatArrayOf(max(p.measureText(text), 1f) / K, (fm.descent - fm.ascent) / K, -fm.ascent / K)
+    private fun alignment(): Layout.Alignment = when (textAlign) {
+        1 -> Layout.Alignment.ALIGN_CENTER
+        2 -> Layout.Alignment.ALIGN_OPPOSITE
+        else -> Layout.Alignment.ALIGN_NORMAL
     }
 
-    /** Pone el recuadro en su tamaño natural alrededor de su centro actual. */
+    /** El texto armado a [K] px por mm. [widthMm] = null: sin saltos de línea (una sola línea, ancho natural). */
+    @Synchronized
+    private fun layoutFor(widthMm: Float?): StaticLayout {
+        val key = "$text|$fontSize|$fontFamily|$isBold|$isItalic|$isUnderline|$color|$letterSpacing|$textAlign|$lineHeight|${widthMm ?: -1f}"
+        val c = cacheLayout
+        if (c != null && key == cacheKey) return c
+        val tp = textPaint(fontSize * MM_PER_UNIT * K)
+        val txt: CharSequence = if (text.isEmpty()) " " else text
+        val wPx = if (widthMm == null) ceil(Layout.getDesiredWidth(txt, tp)).toInt() + 2 else max(1, (widthMm * K).roundToInt())
+        val l = StaticLayout.Builder.obtain(txt, 0, txt.length, tp, wPx)
+            .setAlignment(alignment())
+            .setLineSpacing(0f, lineHeight.coerceIn(MIN_LINE, MAX_LINE))
+            .setIncludePad(false)
+            .build()
+        cacheKey = key
+        cacheLayout = l
+        return l
+    }
+
+    /**
+     * Tamaño del texto en mm: [ancho, alto]. [widthMm] = null: una línea (ancho = el de la línea más larga); si no, ese ancho.
+     * El alto va del borde de arriba a lo más bajo de la última línea (con una altura de línea menor que 1 las líneas se pegan, pero
+     * el recuadro sigue cubriendo las letras).
+     */
+    @Synchronized
+    fun measure(widthMm: Float?): FloatArray {
+        val l = layoutFor(widthMm)
+        var w = 0f
+        for (i in 0 until l.lineCount) w = max(w, l.getLineWidth(i))
+        val h = l.getLineBaseline(l.lineCount - 1) + l.paint.fontMetrics.descent
+        return floatArrayOf(if (widthMm == null) max(w, 1f) / K else widthMm, h / K)
+    }
+
+    /** Ancho y alto que debe tener el recuadro con el estado actual (libre: una línea; fijo: su ancho y el alto del texto o el mayor dado). */
+    private fun boxSize(): FloatArray {
+        if (!isFixedWidth) {
+            frameH = 0f
+            return measure(null)
+        }
+        val w = max(bounds.width(), MIN_WIDTH_MM)
+        val h = measure(w)[1]
+        return floatArrayOf(w, if (frameH > h) frameH else h)
+    }
+
+    private fun topLeft(): FloatArray =
+        Xf.toPage(bounds.centerX(), bounds.centerY(), rotation, -bounds.width() / 2f, -bounds.height() / 2f)
+
+    private fun setFromTopLeft(tx: Float, ty: Float, w: Float, h: Float) {
+        val c = Xf.toPage(tx, ty, rotation, w / 2f, h / 2f)
+        bounds.set(c[0] - w / 2f, c[1] - h / 2f, c[0] + w / 2f, c[1] + h / 2f)
+    }
+
+    /** Ajusta el recuadro al texto manteniendo fija su esquina superior izquierda (con el giro actual). */
     fun refit() {
-        val n = natural()
-        val cx = bounds.centerX()
-        val cy = bounds.centerY()
-        bounds.set(cx - n[0] / 2f, cy - n[1] / 2f, cx + n[0] / 2f, cy + n[1] / 2f)
+        val tl = topLeft()
+        val s = boxSize()
+        setFromTopLeft(tl[0], tl[1], s[0], s[1])
     }
 
-    /** Pasa la escala del recuadro (tras redimensionar) al tamaño de la letra y vuelve al tamaño natural. */
-    fun bakeScale() {
-        val k = bounds.width() / natural()[0]
-        if (abs(k - 1f) > 0.002f) fontSize = (fontSize * k).coerceIn(MIN_SIZE, MAX_SIZE)
-        refit()
+    /** Como [refit], pero con la esquina superior izquierda en (tx, ty) de la hoja (al terminar de editar el texto). */
+    fun placeTopLeft(tx: Float, ty: Float) {
+        val s = boxSize()
+        setFromTopLeft(tx, ty, s[0], s[1])
     }
 
-    /** Recuadro natural con su punto izquierdo-centro (el origen del texto, ya con el giro) en (ax, ay) de la hoja. */
+    /** Recuadro de un texto NUEVO (una línea) con su punto izquierdo-centro en (ax, ay) de la hoja. */
     fun placeLeftCenter(ax: Float, ay: Float) {
-        val n = natural()
-        val c = Xf.toPage(ax, ay, rotation, n[0] / 2f, 0f)
-        bounds.set(c[0] - n[0] / 2f, c[1] - n[1] / 2f, c[0] + n[0] / 2f, c[1] + n[1] / 2f)
+        val s = boxSize()
+        val c = Xf.toPage(ax, ay, rotation, s[0] / 2f, 0f)
+        bounds.set(c[0] - s[0] / 2f, c[1] - s[1] / 2f, c[0] + s[0] / 2f, c[1] + s[1] / 2f)
     }
+
+    // ---------- Arrastre de tiradores ----------
+
+    /** Empieza un arrastre: [G_CORNER] (esquinas o grupo: escala), [G_SIDE] (izquierda o derecha: ancho), [G_VERT] (arriba o abajo: alto) o [G_NONE]. */
+    fun beginGesture(mode: Int) {
+        gMode = mode
+        scaleRef = if (mode == G_CORNER) RectF(bounds) else null
+    }
+
+    /** Abandona un arrastre sin aplicar nada (el estado del texto no cambió). */
+    fun cancelGesture() {
+        gMode = G_NONE
+        scaleRef = null
+    }
+
+    /** Termina el arrastre y pasa lo hecho a los datos del texto: tamaño de letra, ancho fijo o alto del recuadro. */
+    fun endGesture() {
+        val mode = gMode
+        val ref = scaleRef
+        cancelGesture()
+        when (mode) {
+            G_CORNER -> {
+                val k = if (ref != null && ref.width() > 0f) bounds.width() / ref.width() else 1f
+                if (abs(k - 1f) > 0.002f) {
+                    fontSize = (fontSize * k).coerceIn(MIN_SIZE, MAX_SIZE)
+                    if (frameH > 0f) frameH *= k
+                }
+                refit()
+            }
+            G_SIDE -> {
+                isFixedWidth = true
+                refit()
+            }
+            G_VERT -> {
+                isFixedWidth = true
+                val h = measure(max(bounds.width(), MIN_WIDTH_MM))[1]
+                frameH = if (bounds.height() > h + 0.05f) bounds.height() else 0f
+                refit()
+            }
+        }
+    }
+
+    // ---------- Dibujo ----------
 
     override fun draw(c: Canvas, mmToPx: Float, invalidate: () -> Unit) {
         if (text.isEmpty()) return
-        val n = natural()
-        val p = paint(fontSize * MM_PER_UNIT * mmToPx)
-        p.color = color
-        p.alpha = (opacity.coerceIn(0f, 1f) * 255f).roundToInt()
-        p.isUnderlineText = isUnderline
-        val cx = bounds.centerX() * mmToPx
-        val cy = bounds.centerY() * mmToPx
-        val sx = bounds.width() / n[0]
-        val sy = bounds.height() / n[1]
-        val s = c.save()
-        c.rotate(rotation, cx, cy)
-        c.translate(cx, cy)
-        // 1 salvo mientras se redimensiona; el espejo (voltear) va en los ejes propios del texto
-        c.scale(if (isFlippedH) -sx else sx, if (isFlippedV) -sy else sy)
-        c.drawText(text, -n[0] * mmToPx / 2f, -n[1] * mmToPx / 2f + n[2] * mmToPx, p)
-        c.restoreToCount(s)
+        val ref = scaleRef
+        val live = ref != null && ref.width() > 0f // se arrastra una esquina: el texto de siempre, escalado al recuadro
+        val s = if (live) bounds.width() / ref!!.width() else 1f
+        val widthMm: Float? = when {
+            live -> if (isFixedWidth) ref!!.width() else null
+            isFixedWidth || gMode == G_SIDE || gMode == G_VERT -> bounds.width() // el texto se reacomoda al ancho del recuadro
+            else -> null
+        }
+        synchronized(this) {
+            val lay = layoutFor(widthMm)
+            lay.paint.alpha = (opacity.coerceIn(0f, 1f) * 255f).roundToInt()
+            val cx = bounds.centerX() * mmToPx
+            val cy = bounds.centerY() * mmToPx
+            val n = c.save()
+            c.rotate(rotation, cx, cy)
+            c.translate(cx, cy)
+            c.scale(if (isFlippedH) -1f else 1f, if (isFlippedV) -1f else 1f) // espejo sobre el centro del recuadro
+            c.translate(-bounds.width() * mmToPx / 2f, -bounds.height() * mmToPx / 2f) // esquina superior izquierda
+            c.scale(s * mmToPx / K, s * mmToPx / K)
+            lay.draw(c)
+            c.restoreToCount(n)
+        }
     }
 }
 

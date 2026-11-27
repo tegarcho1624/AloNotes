@@ -80,6 +80,13 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
         const val SHAPE_LINE = 63
         const val SHAPE_RECT = 64
         const val SHAPE_CIRCLE = 65
+        const val FIX_OFF = 66
+        const val FIX_ON = 67
+        const val SPACING = 68
+        const val LINE_H = 69
+        const val ALIGN_L = 70
+        const val ALIGN_C = 71
+        const val ALIGN_R = 72
     }
 
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -442,6 +449,58 @@ internal class Icons(private val type: Int, color: Int, private val fill: Boolea
             SHAPE_LINE -> ln(c, 5, 19, 19, 5)
             SHAPE_RECT -> rr(c, 5, 5, 19, 19, 1.5f)
             SHAPE_CIRCLE -> circ(c, 12, 12, 8)
+            FIX_OFF -> {
+                // Ancho libre: flecha doble normal
+                ln(c, 3, 12, 21, 12)
+                poly(c, false, 7, 8, 3, 12, 7, 16)
+                poly(c, false, 17, 8, 21, 12, 17, 16)
+            }
+            FIX_ON -> {
+                // Ancho fijo: flechas hacia afuera que chocan con topes
+                ln(c, 3, 6, 3, 18)
+                ln(c, 21, 6, 21, 18)
+                ln(c, 12, 12, 6, 12)
+                poly(c, false, 9, 9, 6, 12, 9, 15)
+                ln(c, 12, 12, 18, 12)
+                poly(c, false, 15, 9, 18, 12, 15, 15)
+            }
+            SPACING -> {
+                // Dos letras A y una flecha doble debajo
+                poly(c, false, 3, 12, 6, 4, 9, 12)
+                ln(c, 4.2f, 9, 7.8f, 9)
+                poly(c, false, 15, 12, 18, 4, 21, 12)
+                ln(c, 16.2f, 9, 19.8f, 9)
+                ln(c, 3, 19, 21, 19)
+                poly(c, false, 6, 16, 3, 19, 6, 22)
+                poly(c, false, 18, 16, 21, 19, 18, 22)
+            }
+            LINE_H -> {
+                // Flecha doble vertical y tres líneas de texto
+                ln(c, 6, 4, 6, 20)
+                poly(c, false, 3, 7, 6, 4, 9, 7)
+                poly(c, false, 3, 17, 6, 20, 9, 17)
+                ln(c, 12, 7, 21, 7)
+                ln(c, 12, 12, 21, 12)
+                ln(c, 12, 17, 21, 17)
+            }
+            ALIGN_L -> {
+                ln(c, 4, 6, 20, 6)
+                ln(c, 4, 10, 14, 10)
+                ln(c, 4, 14, 20, 14)
+                ln(c, 4, 18, 14, 18)
+            }
+            ALIGN_C -> {
+                ln(c, 4, 6, 20, 6)
+                ln(c, 7, 10, 17, 10)
+                ln(c, 4, 14, 20, 14)
+                ln(c, 7, 18, 17, 18)
+            }
+            ALIGN_R -> {
+                ln(c, 4, 6, 20, 6)
+                ln(c, 10, 10, 20, 10)
+                ln(c, 4, 14, 20, 14)
+                ln(c, 10, 18, 20, 18)
+            }
             THICKNESS -> {
                 // Cuatro líneas de grosor creciente
                 p.strokeWidth = 1f
