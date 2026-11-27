@@ -36,7 +36,11 @@ internal class TextSnap(
     val b: Float,
     val rot: Float,
     val op: Float,
-    val lk: Boolean
+    val lk: Boolean,
+    val fh: Boolean = false,
+    val fv: Boolean = false,
+    val lt: Int = 0,
+    val ld: String = ""
 )
 
 /** Estado lógico de una capa. Los trazos son inmutables, así que se guardan las referencias (no se copian los puntos). */

@@ -360,6 +360,8 @@ class EditorActivity : Activity() {
         val sel = selectedImages()
         // Los trazos seleccionados se rasterizan JUNTOS en un solo sticker (en el orden en que se dibujan). Se copian sin su camino
         // calculado ni su opacidad: así el hilo de fondo no toca nada que la hoja esté usando.
+        // Cada texto seleccionado es un sticker aparte (como las imágenes): se dibuja tal como se ve (giro y espejo; sin opacidad).
+        val texts = viewport.currentSelection().filterIsInstance<TextItem>().map { it.plainCopy() }
         val picked = selectedStrokes().toSet()
         val drawn = ArrayList<Stroke>()
         if (picked.isNotEmpty()) {
@@ -367,7 +369,7 @@ class EditorActivity : Activity() {
                 for (s in ly.canvas) if (picked.contains(s)) drawn.add(Stroke(s.type, s.color, s.widthMm, s.pts, 1f, false))
             }
         }
-        if (sel.isEmpty() && drawn.isEmpty()) {
+        if (sel.isEmpty() && drawn.isEmpty() && texts.isEmpty()) {
             toast("Selecciona un objeto primero")
             return
         }
@@ -378,6 +380,12 @@ class EditorActivity : Activity() {
             for (im in sel) {
                 val bm = im.bitmap ?: continue
                 val out = renderForSticker(im, bm) ?: continue
+                val f = ImageFiles.write(out, dir, UUID.randomUUID().toString()) ?: continue
+                StickerStore.add(this, cat, f)
+                saved++
+            }
+            for (t in texts) {
+                val out = renderTextForSticker(t) ?: continue
                 val f = ImageFiles.write(out, dir, UUID.randomUUID().toString()) ?: continue
                 StickerStore.add(this, cat, f)
                 saved++
@@ -440,6 +448,44 @@ class EditorActivity : Activity() {
     }
 
     /**
+     * Rasteriza un texto (una copia suya, sin opacidad): un PNG transparente del tamaño de su caja girada más un margen, con la misma
+     * densidad que los trazos (la que quepa en 1024 px, entre 1 y 12 píxeles por mm).
+     */
+    private fun renderTextForSticker(t: TextItem): android.graphics.Bitmap? {
+        val b = t.bounds
+        var x0 = Float.MAX_VALUE
+        var y0 = Float.MAX_VALUE
+        var x1 = -Float.MAX_VALUE
+        var y1 = -Float.MAX_VALUE
+        for (k in 0 until 4) {
+            val p = Xf.toPage(
+                b.centerX(), b.centerY(), t.rotation,
+                (if (k % 2 == 0) -1 else 1) * b.width() / 2f, (if (k < 2) -1 else 1) * b.height() / 2f
+            )
+            if (p[0] < x0) x0 = p[0]
+            if (p[0] > x1) x1 = p[0]
+            if (p[1] < y0) y0 = p[1]
+            if (p[1] > y1) y1 = p[1]
+        }
+        val pad = 0.5f
+        val wMm = x1 - x0 + 2f * pad
+        val hMm = y1 - y0 + 2f * pad
+        if (t.text.isEmpty() || wMm <= 0f || hMm <= 0f) return null
+        val k = (1024f / maxOf(wMm, hMm)).coerceIn(1f, 12f)
+        val pw = Math.ceil((wMm * k).toDouble()).toInt().coerceAtLeast(1)
+        val ph = Math.ceil((hMm * k).toDouble()).toInt().coerceAtLeast(1)
+        return try {
+            val out = android.graphics.Bitmap.createBitmap(pw, ph, android.graphics.Bitmap.Config.ARGB_8888)
+            val c = android.graphics.Canvas(out)
+            c.translate(-(x0 - pad) * k, -(y0 - pad) * k)
+            t.draw(c, k) { }
+            out
+        } catch (e: Throwable) {
+            null
+        }
+    }
+
+    /**
      * Dibuja [im] en un bitmap del tamaño de su caja girada: el rectángulo (con su giro θ) ocupa W·|cosθ| + H·|sinθ| de ancho y
      * W·|sinθ| + H·|cosθ| de alto. Se usa la misma densidad (píxeles por mm) que la imagen y un máximo de 2048 px.
      */
@@ -476,12 +522,6 @@ class EditorActivity : Activity() {
         if (total == 0) return
         if (viewport.inCropMode) {
             toast("Termina o cancela el recorte primero")
-            return
-        }
-        // Con un texto seleccionado solo funciona eliminar (y pegar / seleccionar todo, que no dependen de él): lo demás, próximamente.
-        val textSel = viewport.currentSelection().any { it is TextItem }
-        if (textSel && (a == SelAct.STICKER || a == SelAct.COPY || a == SelAct.FRONT || a == SelAct.BACK)) {
-            UiKit.soon(this)
             return
         }
         when (a) {
@@ -530,10 +570,12 @@ class EditorActivity : Activity() {
         }
         val pre = pl.snapshot()
         layer.items.addAll(made.images)
+        layer.texts.addAll(made.texts)
         layer.canvas.addAll(made.strokes)
         history.record(pre)
         val now = ArrayList<SelectableItem>()
         now.addAll(made.images)
+        now.addAll(made.texts)
         for (s in made.strokes) now.add(StrokeItem(s))
         viewport.setSelection(now)
         viewport.refreshPage()
@@ -546,7 +588,8 @@ class EditorActivity : Activity() {
     private fun reorderSelection(front: Boolean) {
         val sel = selectedImages()
         val selStrokes = selectedStrokes()
-        if (sel.isEmpty() && selStrokes.isEmpty()) {
+        val selTexts = viewport.currentSelection().filterIsInstance<TextItem>()
+        if (sel.isEmpty() && selStrokes.isEmpty() && selTexts.isEmpty()) {
             toast("Selecciona uno o varios objetos")
             return
         }
@@ -554,6 +597,7 @@ class EditorActivity : Activity() {
         val pre = pl.snapshot()
         val set = HashSet<ImageItem>(sel)
         val strokeSet = HashSet<Stroke>(selStrokes)
+        val textSet = HashSet<TextItem>(selTexts)
         var changed = false
         var strokesChanged = false
         for (ly in pl.layers) {
@@ -563,6 +607,14 @@ class EditorActivity : Activity() {
                 ly.items.removeAll(mine.toSet())
                 if (front) ly.items.addAll(mine) else ly.items.addAll(0, mine)
                 if (before != ly.items) changed = true
+            }
+            // Los textos se reordenan entre los textos de su capa (se dibujan encima de las imágenes y debajo de los trazos).
+            val mineT = ly.texts.filter { textSet.contains(it) }
+            if (mineT.isNotEmpty()) {
+                val beforeT = ArrayList(ly.texts)
+                ly.texts.removeAll(mineT.toSet())
+                if (front) ly.texts.addAll(mineT) else ly.texts.addAll(0, mineT)
+                if (beforeT != ly.texts) changed = true
             }
             // Los trazos se reordenan entre los trazos de su capa (las imágenes de la capa siempre se dibujan debajo de ellos).
             val mineS = ly.canvas.filter { strokeSet.contains(it) }
@@ -631,7 +683,15 @@ class EditorActivity : Activity() {
     private fun showLinkMenu(item: Linkable) {
         val ink = getColor(R.color.ink)
         val l = UiKit.vbox(this, 12)
-        val t = UiKit.text(this, if (item is StrokeItem) "Enlace del trazo" else "Enlace de la imagen", 17, ink)
+        val t = UiKit.text(
+            this,
+            when (item) {
+                is StrokeItem -> "Enlace del trazo"
+                is TextItem -> "Enlace del texto"
+                else -> "Enlace de la imagen"
+            },
+            17, ink
+        )
         t.setPadding(dp(14), dp(8), dp(14), dp(4))
         l.addView(t)
         if (item.linkType != ImageItem.LINK_NONE) {

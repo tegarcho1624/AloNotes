@@ -360,12 +360,13 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         invalidate()
     }
 
-    /** Selecciona todos los objetos (imágenes y trazos, sin bloquear) de la capa actual. Devuelve cuántos son. */
+    /** Selecciona todos los objetos (imágenes, textos y trazos, sin bloquear) de la capa actual. Devuelve cuántos son. */
     fun selectAll(): Int {
         val pl = strokes?.page(index) ?: return 0
         val ly = pl.layers[pl.selected]
         val items = ArrayList<SelectableItem>()
         for (im in ly.items) if (!im.isLocked) items.add(im)
+        for (t in ly.texts) if (!t.isLocked) items.add(t)
         for (st in ly.canvas) if (!st.locked) items.add(StrokeItem(st))
         setSelection(items)
         return items.size
@@ -487,6 +488,7 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
 
     private fun rebuild() {
         cancelStroke()
+        val ed = editor // el cuadro de escritura sobrevive a la reconstrucción de la vista (por ejemplo, si cambia el tamaño)
         removeAllViews()
         single = null
         column = null
@@ -529,6 +531,14 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
             })
         }
         applyTransform()
+        if (ed != null && editor === ed && !continuous) {
+            single?.hiddenText = editItem
+            addView(ed, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+            post {
+                layoutEditor()
+                ed.requestFocus()
+            }
+        }
     }
 
     // ---------- Geometría ----------
@@ -911,6 +921,10 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                 val st = ly.canvas[k]
                 if (st.linkType != ImageItem.LINK_NONE && StrokeOps.hit(st, p[0], p[1], 2f)) return StrokeItem(st)
             }
+            for (k in ly.texts.indices.reversed()) {
+                val t = ly.texts[k]
+                if (t.linkType != ImageItem.LINK_NONE && t.hit(p[0], p[1])) return t
+            }
             for (k in ly.items.indices.reversed()) {
                 val im = ly.items[k]
                 if (im.linkType != ImageItem.LINK_NONE && im.hit(p[0], p[1])) return im
@@ -1033,6 +1047,11 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         et.background = null
         et.setPadding(0, 0, 0, 0)
         et.includeFontPadding = false
+        // La hoja (PageView) tiene elevación 4 dp y Android dibuja encima lo que tiene más elevación sin importar el orden: sin esto
+        // el cuadro quedaba debajo de la hoja y las letras no se veían mientras se escribía. No tiene fondo, así que no hay sombra.
+        et.elevation = dp(10).toFloat()
+        et.alpha = 1f
+        et.visibility = View.VISIBLE
         et.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS // una sola línea: Enter termina
         et.imeOptions = EditorInfo.IME_ACTION_DONE or EditorInfo.IME_FLAG_NO_EXTRACT_UI
         et.setOnEditorActionListener { _, actionId, ev ->
@@ -1379,7 +1398,9 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
                     if (pre != null) onRecord?.invoke(pre)
                 }
                 manipPre = null
-                if (one) (selItem as? TextItem)?.bakeScale() // el cambio de escala pasa al tamaño de la letra
+                // el cambio de escala pasa al tamaño de la letra (un texto suelto o los de un grupo)
+                if (one) (selItem as? TextItem)?.bakeScale()
+                if (grp) for (m in multiSel) if (m is TextItem) m.bakeScale()
                 val st = selItem as? StrokeItem
                 if (st != null && one) {
                     commitStroke(st) // los puntos quedan transformados y se guardan con el archivo de trazos
@@ -2214,13 +2235,13 @@ internal class PageViewport(ctx: Context) : FrameLayout(ctx) {
         col.setPadding(dp(4), dp(4), dp(4), dp(4))
         col.background = UiKit.rect(ctx, ctx.getColor(R.color.sf2), 16, ctx.getColor(R.color.ln2))
         val acts = if (selItem is TextItem) {
-            // Texto: por ahora todas las opciones dicen "Próximamente".
+            // Texto: enlace, voltear, opacidad y bloquear (sin recortes: son de imágenes)
             listOf(
-                MenuAct(Icons.LINK, "Enlace", 0f, soonAct("Enlace")),
-                MenuAct(Icons.FLIP, "Voltear horizontal", 0f, soonAct("Voltear horizontal")),
-                MenuAct(Icons.FLIP, "Voltear vertical", 90f, soonAct("Voltear vertical")),
-                MenuAct(Icons.OPACITY, "Opacidad", 0f, soonAct("Opacidad")),
-                MenuAct(Icons.LOCK, "Bloquear objeto", 0f, soonAct("Bloquear objeto"))
+                MenuAct(Icons.LINK, "Enlace", 0f) { (selItem as? Linkable)?.let { onEditLink?.invoke(it) } },
+                MenuAct(Icons.FLIP, "Voltear horizontal", 0f) { flipSelected(true) },
+                MenuAct(Icons.FLIP, "Voltear vertical", 90f) { flipSelected(false) },
+                MenuAct(Icons.OPACITY, "Opacidad", 0f) { showOpacity(anchor) },
+                MenuAct(Icons.LOCK, "Bloquear objeto", 0f) { setLocked(true) }
             )
         } else if (selItem is StrokeItem) {
             listOf(

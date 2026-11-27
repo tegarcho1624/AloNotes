@@ -35,7 +35,11 @@ internal class TextDto(
     val b: Float,
     val rot: Float = 0f,
     val op: Float = 1f,
-    val lk: Boolean = false
+    val lk: Boolean = false,
+    val fh: Boolean = false,
+    val fv: Boolean = false,
+    val lt: Int = 0,
+    val ld: String = ""
 )
 
 /** Imagen guardada: archivo (en images/<idNota>/), rectángulo sin rotar en mm de la hoja, rotación y ancho original. */
@@ -126,7 +130,8 @@ internal object LayerRepository {
                     pl.layers.map { ly ->
                         ly.texts.map { TextDto(
                             it.id, it.text, it.fontSize, it.fontFamily, it.isItalic, it.isBold, it.isUnderline, it.color,
-                            it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom, it.rotation, it.opacity, it.isLocked
+                            it.bounds.left, it.bounds.top, it.bounds.right, it.bounds.bottom, it.rotation, it.opacity, it.isLocked,
+                            it.isFlippedH, it.isFlippedV, it.linkType, it.linkData
                         ) }
                     }
                 )

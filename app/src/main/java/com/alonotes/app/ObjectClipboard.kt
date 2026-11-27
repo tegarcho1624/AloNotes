@@ -32,14 +32,35 @@ internal class ClipStroke(
     val linkData: String
 )
 
-/** Lo que crea un pegado: las imágenes y los trazos nuevos (para ponerlos en la capa). */
-internal class Pasted(val images: List<ImageItem>, val strokes: List<Stroke>) {
-    val isEmpty: Boolean get() = images.isEmpty() && strokes.isEmpty()
-    val size: Int get() = images.size + strokes.size
+/** Un texto copiado: sus datos y su centro relativo al centro del grupo. */
+internal class ClipTextObj(
+    val dx: Float,
+    val dy: Float,
+    val w: Float,
+    val h: Float,
+    val rot: Float,
+    val text: String,
+    val size: Float,
+    val family: String,
+    val italic: Boolean,
+    val bold: Boolean,
+    val underline: Boolean,
+    val color: Int,
+    val opacity: Float,
+    val fh: Boolean,
+    val fv: Boolean,
+    val linkType: Int,
+    val linkData: String
+)
+
+/** Lo que crea un pegado: las imágenes, los trazos y los textos nuevos (para ponerlos en la capa). */
+internal class Pasted(val images: List<ImageItem>, val strokes: List<Stroke>, val texts: List<TextItem> = emptyList()) {
+    val isEmpty: Boolean get() = images.isEmpty() && strokes.isEmpty() && texts.isEmpty()
+    val size: Int get() = images.size + strokes.size + texts.size
 }
 
 /**
- * Portapapeles de objetos (imágenes y trazos) de una hoja. Copiar guarda las propiedades y una copia de cada archivo; pegar crea
+ * Portapapeles de objetos (imágenes, trazos y textos) de una hoja. Copiar guarda las propiedades y una copia de cada archivo; pegar crea
  * objetos NUEVOS (id nuevo y archivo nuevo en images/<idNota>/), así que no comparten nada con los originales y se
  * pueden pegar varias veces, también en otra hoja o nota. Los pegados nacen desbloqueados. Los trazos se copian con sus
  * puntos (arreglo propio) y su opacidad; al pegarlos son trazos nuevos.
@@ -47,15 +68,16 @@ internal class Pasted(val images: List<ImageItem>, val strokes: List<Stroke>) {
 internal object ObjectClipboard {
     private var objs: List<ClipObj> = emptyList()
     private var strokeObjs: List<ClipStroke> = emptyList()
+    private var textObjs: List<ClipTextObj> = emptyList()
     private var pastes = 0
 
-    val isEmpty: Boolean get() = objs.isEmpty() && strokeObjs.isEmpty()
+    val isEmpty: Boolean get() = objs.isEmpty() && strokeObjs.isEmpty() && textObjs.isEmpty()
 
-    val size: Int get() = objs.size + strokeObjs.size
+    val size: Int get() = objs.size + strokeObjs.size + textObjs.size
 
     private fun dir(c: Context) = File(c.filesDir, "clipboard_objects")
 
-    /** Reemplaza el contenido del portapapeles con [items] (imágenes y trazos; no modifica los originales). */
+    /** Reemplaza el contenido del portapapeles con [items] (imágenes, trazos y textos; no modifica los originales). */
     fun copy(c: Context, items: List<SelectableItem>) {
         val d = dir(c)
         try {
@@ -86,8 +108,18 @@ internal object ObjectClipboard {
         val gy = (y0 + y1) / 2f
         val out = ArrayList<ClipObj>()
         val outStrokes = ArrayList<ClipStroke>()
+        val outTexts = ArrayList<ClipTextObj>()
         var n = 0
         for (it in items) {
+            if (it is TextItem) {
+                val b = it.bounds
+                outTexts.add(
+                    ClipTextObj(
+                        b.centerX() - gx, b.centerY() - gy, b.width(), b.height(), it.rotation, it.text, it.fontSize, it.fontFamily,
+                        it.isItalic, it.isBold, it.isUnderline, it.color, it.opacity, it.isFlippedH, it.isFlippedV, it.linkType, it.linkData
+                    )
+                )
+            }
             if (it is StrokeItem) {
                 val sp = it.src.pts
                 val rel = FloatArray(sp.size)
@@ -119,6 +151,7 @@ internal object ObjectClipboard {
         }
         objs = out
         strokeObjs = outStrokes
+        textObjs = outTexts
         pastes = 0
     }
 
@@ -189,7 +222,19 @@ internal object ObjectClipboard {
             }
             outStrokes.add(Stroke(so.type, so.color, so.widthMm, pts, so.opacity, false, 0L, so.linkType, so.linkData))
         }
-        if (out.isNotEmpty() || outStrokes.isNotEmpty()) pastes++
-        return Pasted(out, outStrokes)
+        val outTexts = ArrayList<TextItem>()
+        for (to in textObjs) {
+            val mx = cx + to.dx + off + fx
+            val my = cy + to.dy + off + fy
+            outTexts.add(
+                TextItem(
+                    UUID.randomUUID().toString(), to.text, to.size, to.family, to.italic, to.bold, to.underline, to.color,
+                    RectF(mx - to.w / 2f, my - to.h / 2f, mx + to.w / 2f, my + to.h / 2f), to.rot, to.opacity, false,
+                    to.fh, to.fv, to.linkType, to.linkData
+                )
+            )
+        }
+        if (out.isNotEmpty() || outStrokes.isNotEmpty() || outTexts.isNotEmpty()) pastes++
+        return Pasted(out, outStrokes, outTexts)
     }
 }

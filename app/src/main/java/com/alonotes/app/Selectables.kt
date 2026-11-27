@@ -227,8 +227,12 @@ internal class TextItem(
     override val bounds: RectF,
     override var rotation: Float,
     override var opacity: Float = 1f,
-    override var isLocked: Boolean = false
-) : SelectableItem {
+    override var isLocked: Boolean = false,
+    override var isFlippedH: Boolean = false,
+    override var isFlippedV: Boolean = false,
+    override var linkType: Int = ImageItem.LINK_NONE,
+    override var linkData: String = ""
+) : SelectableItem, Linkable {
     companion object {
         const val MM_PER_UNIT = 0.2f
         const val MIN_SIZE = 8f
@@ -265,8 +269,11 @@ internal class TextItem(
         }
     }
 
-    override var isFlippedH: Boolean = false
-    override var isFlippedV: Boolean = false
+    /** Una copia sin opacidad, sin bloqueo y con su recuadro propio (para dibujarla aparte, por ejemplo en un sticker). */
+    fun plainCopy(): TextItem = TextItem(
+        id, text, fontSize, fontFamily, isItalic, isBold, isUnderline, color, RectF(bounds), rotation, 1f, false,
+        isFlippedH, isFlippedV
+    )
 
     /** Centro del recuadro (mm de la hoja). */
     var x: Float
@@ -332,7 +339,8 @@ internal class TextItem(
         val s = c.save()
         c.rotate(rotation, cx, cy)
         c.translate(cx, cy)
-        c.scale(sx, sy) // 1 salvo mientras se redimensiona
+        // 1 salvo mientras se redimensiona; el espejo (voltear) va en los ejes propios del texto
+        c.scale(if (isFlippedH) -sx else sx, if (isFlippedV) -sy else sy)
         c.drawText(text, -n[0] * mmToPx / 2f, -n[1] * mmToPx / 2f + n[2] * mmToPx, p)
         c.restoreToCount(s)
     }

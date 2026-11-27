@@ -367,6 +367,20 @@ el ícono del launcher (color fijo).
 - **Archivos tocados:** `Selectables.kt`, `Strokes.kt`, `History.kt`, `LayerRepository.kt`, `PageClipboard.kt`, `PageManagerActivity.kt`, `PageViewport.kt`, `EditorActivity.kt`, `PenOptions.kt`,
   `Stores.kt`, `FontManager.kt` (`typefaceFor`) y el archivo nuevo `TextOptions.kt`.
 
+## Texto completo: barra de 7 íconos, menú de 3 puntos y arreglo del cuadro invisible (v0.27.0)
+- **Arreglo del texto invisible al escribir:** `PageView` tiene `elevation = 4 dp` y Android dibuja ENCIMA lo que tiene más elevación sin importar el orden de los hijos; el `EditText` flotante tenía 0,
+  así que quedaba debajo de la hoja (el color no era el problema). Ahora `et.elevation = dp(10)` (sin fondo, no hay sombra). Además `rebuild()` ya no pierde el cuadro si la vista se reconstruye
+  (lo vuelve a añadir y lo recoloca).
+- **Barra de 7 íconos con textos:** Seleccionar todo incluye textos (imágenes, textos y trazos sin bloquear). Copiar/pegar clona el `TextItem` con todas sus propiedades (`ObjectClipboard`: `ClipTextObj`;
+  los pegados nacen desbloqueados y con id nuevo). Al frente/al fondo reordena los textos entre los textos de su capa (imágenes < textos < trazos). Eliminar ya borraba textos. Guardar como sticker
+  rasteriza cada texto seleccionado en un PNG transparente aparte (`renderTextForSticker`: con giro y espejo, sin opacidad). Un grupo con textos se mueve/escala/gira como uno de imágenes; al soltar
+  `bakeScale()` pasa la escala al tamaño de la letra de cada texto.
+- **Menú de 3 puntos del texto:** Enlace, Voltear horizontal, Voltear vertical, Opacidad y Bloquear funcionan (sin Recortar ni Recorte libre, que son de imágenes). `TextItem` ahora implementa `Linkable`
+  (`linkType`/`linkData`, mismo diálogo de enlace con título "Enlace del texto"), tiene `isFlippedH/V` (el espejo se aplica al dibujar, en los ejes del texto) y `opacity`/`isLocked` ya existían. Tocar un
+  texto con enlace con lápiz, marcador o sin herramienta lo abre (`linkAt`); con la herramienta texto, tocarlo lo edita.
+- **Guardado:** `TextDto` (layers/<idNota>.json) ahora guarda también `fh`, `fv`, `lt`, `ld` (con valores por defecto: los archivos de la versión anterior cargan igual); `TextSnap` (historial) y
+  `ClipText` (copiar hoja) igual. Todo cambio (copiar, pegar, mover, voltear, opacidad, bloquear, enlace, orden) es UN paso de deshacer/rehacer y se guarda con las capas.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.
