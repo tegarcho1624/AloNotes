@@ -444,6 +444,12 @@ el ícono del launcher (color fijo).
   borra por error, y al borrar una hoja su fondo queda huérfano y se limpia; al borrar la nota se borra toda la carpeta `images/<idNota>/`. Copiar/pegar hojas (`PageClipboard`: `ClipPage.bg`) copia el archivo de fondo con
   nombre nuevo (nada se comparte entre hojas). Las miniaturas del gestor de hojas también dibujan el fondo.
 
+## Corrección del menú ⋮ del panel de capas (v0.32.1)
+- **Problema:** con la capa 1 seleccionada el menú tiene más filas (fusión, bloqueo, insertar/quitar imagen de fondo: unos 340 a 380 dp) y el botón ⋮ queda abajo en el panel; como la ventana no cabía hacia abajo, Android la recortaba y las filas
+  del final (las del fondo) quedaban fuera de la pantalla. La condición (`m.selected == 0`, el índice 0 del modelo = la capa 1) y las filas estaban bien.
+- **Arreglo (`LayersPanel.showMenu`):** se mide el contenido, la ventana se coloca arriba o abajo del botón según donde haya más espacio y, si aun así no cabe, tiene el alto disponible y el contenido se desplaza (`ScrollView`).
+  El modo de fusión y el bloqueo no cambiaron.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

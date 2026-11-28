@@ -561,11 +561,30 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
                 col.addView(r, LinearLayout.LayoutParams(dp(250), dp(44)))
             }
         }
-        val p = PopupWindow(col, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true)
+        // El menú es alto (con la capa 1 más): el botón ⋮ queda abajo en el panel y, si la ventana no cabe, Android la recorta y las
+        // últimas filas se pierden fuera de la pantalla. Por eso: se mide el contenido, se pone arriba o abajo del botón (donde haya más
+        // espacio) y, si aun así no cabe, la ventana tiene el alto disponible y el contenido se desplaza.
+        val dm = a.resources.displayMetrics
+        val margin = dp(8)
+        col.measure(
+            View.MeasureSpec.makeMeasureSpec(dm.widthPixels, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val contentW = col.measuredWidth
+        val contentH = col.measuredHeight
+        val loc = IntArray(2)
+        anchor.getLocationOnScreen(loc)
+        val below = dm.heightPixels - (loc[1] + anchor.height) - margin
+        val above = loc[1] - margin
+        val up = contentH > below && above > below
+        val h = minOf(contentH, if (up) above else below).coerceAtLeast(dp(120))
+        val scroll = ScrollView(a)
+        scroll.addView(col)
+        val p = PopupWindow(scroll, contentW, h, true)
         p.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         p.elevation = dp(8).toFloat()
         pw = p
-        p.showAsDropDown(anchor, 0, 0, Gravity.END)
+        if (up) p.showAsDropDown(anchor, 0, -(anchor.height + h), Gravity.END) else p.showAsDropDown(anchor, 0, 0, Gravity.END)
     }
 
     /** Cambia el modo de fusión de la capa (un paso del historial); se redibuja la hoja y se guardan las capas. */
