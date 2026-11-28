@@ -21,6 +21,14 @@ internal object ImageUtil {
         return s
     }
 
+    /** El bitmap ya decodificado de [path] a [maxPx], si está en la caché (no decodifica nada). */
+    fun peek(path: String, maxPx: Int): Bitmap? = cache.get("$path@$maxPx")
+
+    /** Saca de la caché todo lo decodificado de [path] (por ejemplo, al borrar o reemplazar el archivo). */
+    fun forget(path: String) {
+        for (k in cache.snapshot().keys) if (k.startsWith("$path@")) cache.remove(k)
+    }
+
     /** Lee un archivo reducido (con caché). null si falla. */
     fun decodeFile(path: String, maxPx: Int): Bitmap? {
         cache.get("$path@$maxPx")?.let { return it }

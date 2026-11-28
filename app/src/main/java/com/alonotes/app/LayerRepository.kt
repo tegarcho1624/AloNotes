@@ -15,7 +15,9 @@ internal class PageState(
     /** Imágenes de cada capa (misma posición que [layers]). */
     val images: List<List<ImageDto>> = emptyList(),
     /** Textos de cada capa (misma posición que [layers]); los archivos viejos no lo traen. */
-    val texts: List<List<TextDto>> = emptyList()
+    val texts: List<List<TextDto>> = emptyList(),
+    /** Imagen de fondo de la hoja: nombre de su archivo en images/<idNota>/ (null = ninguna). Los archivos viejos no lo traen. */
+    val backgroundImagePath: String? = null
 )
 
 /** Texto guardado: contenido, estilo (fuente = id de FontManager) y recuadro sin rotar en mm de la hoja con su rotación. */
@@ -116,7 +118,11 @@ internal object LayerRepository {
         FontManager.current(c) // los textos miden con su fuente al cargarse: FontManager necesita ya su contexto
         for ((i, ps) in loadLayers(c, id).withIndex()) {
             if (i >= 5000) break
-            doc.page(i).restore(ps.layers, ps.selected, ps.counts, ps.images, File(c.filesDir, "images/" + id), ps.texts)
+            val imgDir = File(c.filesDir, "images/" + id)
+            val pg = doc.page(i)
+            pg.restore(ps.layers, ps.selected, ps.counts, ps.images, imgDir, ps.texts)
+            pg.backgroundImagePath = ps.backgroundImagePath
+            pg.bgDir = imgDir
         }
     }
 
@@ -139,7 +145,8 @@ internal object LayerRepository {
                             it.isFlippedH, it.isFlippedV, it.linkType, it.linkData,
                             it.isFixedWidth, it.letterSpacing, it.textAlign, it.lineHeight
                         ) }
-                    }
+                    },
+                    pl.backgroundImagePath
                 )
             }
             json.encodeToString(DocState.serializer(), DocState(1, pages))

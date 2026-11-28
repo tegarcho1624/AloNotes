@@ -430,6 +430,20 @@ el ícono del launcher (color fijo).
   capas; también a los 400 ms si no llega el aviso de soltar). Cada movimiento de la barra es UN paso del historial (foto de la hoja de antes, `PageSnap`). Se puede cambiar la opacidad de una capa bloqueada.
 - No afecta a los modos de fusión (la misma capa de dibujo lleva opacidad y modo) ni al bloqueo.
 
+## Imagen de fondo de la hoja (v0.32.0)
+- **No crea una hoja nueva:** pone una imagen de la galería como fondo de la hoja actual (que ya tiene su tamaño). Se escala con una `Matrix` tipo **centerCrop** (se estira hasta cubrir toda la hoja sin deformarse y se recorta lo que
+  sobra) y se dibuja primero en `PageView.onDraw`: encima del color de la hoja y debajo de todas las capas, trazos, imágenes y textos (no es una capa: no se selecciona ni se mueve; el bloqueo de capas no la afecta).
+- **Menú ⋮ del panel:** con la capa de hasta abajo (la 1) seleccionada aparece "Insertar imagen de fondo" y, si la hoja ya tiene una, "Quitar imagen de fondo". Insertar abre la galería (`REQ_BACKGROUND`, `ACTION_OPEN_DOCUMENT`);
+  solo en la vista de una hoja (como las demás herramientas de edición).
+- **Almacenamiento:** `EditorActivity.setBackgroundFromUri` copia la imagen a `images/<idNota>/` (reducida a 2048 px, respetando EXIF, JPEG o PNG si tiene transparencia) con `ImageUtil.saveFromUri`.
+- **Modelo y JSON:** `PageLayers.backgroundImagePath` (nombre del archivo, no la ruta completa, para no depender de dónde esté la carpeta de la app) y `PageLayers.bgDir` (solo en memoria, se asigna al cargar). Se guarda en
+  `PageState.backgroundImagePath` del JSON de capas (los archivos anteriores no lo traen y cargan sin fondo). No forma parte del historial de deshacer (deshacer no quita ni pone el fondo).
+- **Carga sin frenar el dibujo (`PageBackground.kt`, nuevo):** `get` devuelve el bitmap si está en la caché de `ImageUtil` (nuevas `peek` y `forget`); si no, lo decodifica en un hilo (1024 px en la vista continua, 2048 en la de una
+  hoja) y la hoja se vuelve a dibujar al terminar. Un archivo ilegible no se reintenta en cada cuadro.
+- **Limpieza de archivos:** al reemplazar o quitar el fondo se borra el archivo viejo (y se saca de la caché). `cleanOrphanImages` (editor) y `cleanupImages` (gestor de hojas) cuentan el fondo como archivo en uso, así que no se
+  borra por error, y al borrar una hoja su fondo queda huérfano y se limpia; al borrar la nota se borra toda la carpeta `images/<idNota>/`. Copiar/pegar hojas (`PageClipboard`: `ClipPage.bg`) copia el archivo de fondo con
+  nombre nuevo (nada se comparte entre hojas). Las miniaturas del gestor de hojas también dibujan el fondo.
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

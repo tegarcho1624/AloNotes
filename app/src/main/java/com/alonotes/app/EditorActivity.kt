@@ -31,6 +31,7 @@ class EditorActivity : Activity() {
         const val REQ_IMAGE = 41
         const val REQ_PAGES = 42
         const val REQ_STICKER = 43
+        const val REQ_BACKGROUND = 44
         val DIMS = arrayOf("A5", "A4", "A3", "A2")
         val DIM_LABELS = arrayOf("A5 (148 x 210 mm)", "A4 (210 x 297 mm)", "A3 (297 x 420 mm)", "A2 (420 x 594 mm)")
         val MM = arrayOf(
@@ -150,6 +151,8 @@ class EditorActivity : Activity() {
         }
         layersPanel.docId = docId
         layersPanel.onMoveMode = { viewport.layerMoveMode = it }
+        layersPanel.onPickBackground = { editOnly { openBackgroundPicker() } }
+        layersPanel.onRemoveBackground = { removeBackground() }
         layersPanel.onOpacityLive = { viewport.refreshPage() } // la opacidad de la capa se ve mientras se mueve la barra
         layersPanel.onLayersChanged = { dirty ->
             layers.count = layersPanel.layerCount
@@ -894,6 +897,7 @@ class EditorActivity : Activity() {
     private fun cleanOrphanImages() {
         val keep = HashSet<String>()
         for (pl in strokes.pages) for (ly in pl.layers) for (im in ly.items) keep.add(im.file.name)
+        for (pl in strokes.pages) pl.backgroundImagePath?.let { keep.add(it) } // las imágenes de fondo de las hojas también
         val dir = File(filesDir, "images/$docId")
         Thread {
             try {
@@ -967,6 +971,11 @@ class EditorActivity : Activity() {
             if (res == RESULT_OK && u != null) addStickerFromGallery(u)
             return
         }
+        if (req == REQ_BACKGROUND) {
+            val u = data?.data
+            if (res == RESULT_OK && u != null) setBackgroundFromUri(u)
+            return
+        }
         if (req == REQ_PAGES) {
             if (res == RESULT_OK && data != null) {
                 onPagesResult(data.getBooleanExtra("changed", false), data.getIntExtra("page", -1))
@@ -988,6 +997,77 @@ class EditorActivity : Activity() {
                 } else {
                     insertImage(id, f, bm)
                 }
+            }
+        }.start()
+    }
+
+    // ---------- Imagen de fondo de la hoja ----------
+
+    private var bgPage = -1 // hoja para la que se abrió la galería
+
+    /** Menú ⋮ del panel de capas (capa 1): abre la galería para elegir la imagen de fondo de la hoja actual. */
+    private fun openBackgroundPicker() {
+        if (total == 0) {
+            toast("Primero crea una página")
+            return
+        }
+        bgPage = viewport.index
+        val i = Intent(Intent.ACTION_OPEN_DOCUMENT)
+        i.addCategory(Intent.CATEGORY_OPENABLE)
+        i.type = "image/*"
+        @Suppress("DEPRECATION")
+        startActivityForResult(i, REQ_BACKGROUND)
+    }
+
+    /**
+     * Guarda la imagen elegida en el almacenamiento de la app (images/<idNota>/, reducida a 2048 px y respetando EXIF) y la deja como fondo
+     * de la hoja: la imagen se escala para cubrir toda la hoja sin deformarse (centerCrop, ver PageView.onDraw). Si la hoja ya tenía un
+     * fondo, su archivo se borra. Se guarda con las capas (JSON).
+     */
+    private fun setBackgroundFromUri(uri: Uri) {
+        val idx = bgPage
+        toast("Insertando imagen de fondo…")
+        Thread {
+            val id = UUID.randomUUID().toString()
+            val f = ImageUtil.saveFromUri(this, uri, File(File(filesDir, "images/$docId"), id), 2048, 90, true)
+            runOnUiThread {
+                if (isFinishing) return@runOnUiThread
+                if (f == null || idx < 0 || idx >= total) {
+                    toast("No se pudo abrir la imagen")
+                } else {
+                    val pg = strokes.page(idx)
+                    val old = pg.backgroundFile
+                    pg.backgroundImagePath = f.name
+                    pg.bgDir = f.parentFile
+                    if (old != null && old.name != f.name) deleteBackgroundFile(old)
+                    persistLayers()
+                    viewport.refreshPage()
+                    toast("Imagen de fondo insertada")
+                }
+            }
+        }.start()
+    }
+
+    /** Quita la imagen de fondo de la hoja actual y borra su archivo. */
+    private fun removeBackground() {
+        if (total == 0) return
+        val pg = strokes.page(viewport.index)
+        val old = pg.backgroundFile
+        pg.backgroundImagePath = null
+        if (old != null) deleteBackgroundFile(old)
+        persistLayers()
+        viewport.refreshPage()
+        toast("Imagen de fondo quitada")
+    }
+
+    /** Borra el archivo de un fondo que ya no se usa (y lo saca de la caché) para no acumular basura. */
+    private fun deleteBackgroundFile(f: File) {
+        PageBackground.forget(f)
+        Thread {
+            try {
+                f.delete()
+            } catch (ignored: Exception) {
+                // La limpieza al abrir la nota lo borra si queda.
             }
         }.start()
     }

@@ -65,6 +65,10 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
     /** Id de la nota abierta: las imágenes de una capa pegada se copian a su carpeta de imágenes. */
     var docId = ""
 
+    /** Insertar o quitar la imagen de fondo de la hoja (la opción sale en el menú ⋮ al seleccionar la capa 1). */
+    var onPickBackground: (() -> Unit)? = null
+    var onRemoveBackground: (() -> Unit)? = null
+
     /** Se activa o desactiva el modo "Mover capa" (el visor mueve toda la capa seleccionada al arrastrar). */
     var onMoveMode: ((Boolean) -> Unit)? = null
     private var moveMode = false
@@ -509,7 +513,7 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
                 pw?.dismiss()
                 setBlend(ly, i)
             }
-            col.addView(r, LinearLayout.LayoutParams(dp(210), dp(44)))
+            col.addView(r, LinearLayout.LayoutParams(dp(250), dp(44)))
         }
         val line = View(a)
         line.setBackgroundColor(a.getColor(R.color.ln))
@@ -530,7 +534,33 @@ internal class LayersPanel(private val a: Activity) : FrameLayout(a) {
         lr.addView(sw)
         UiKit.ripple(a, lr, 10, 0)
         lr.setOnClickListener { sw.isChecked = !sw.isChecked }
-        col.addView(lr, LinearLayout.LayoutParams(dp(210), dp(48)))
+        col.addView(lr, LinearLayout.LayoutParams(dp(250), dp(48)))
+        // Solo con la capa de hasta abajo (la 1, el fondo): insertar (o quitar) la imagen de fondo de la hoja
+        if (m.selected == 0) {
+            val line2 = View(a)
+            line2.setBackgroundColor(a.getColor(R.color.ln))
+            val lp2 = LinearLayout.LayoutParams(-1, dp(1))
+            lp2.topMargin = dp(6)
+            lp2.bottomMargin = dp(6)
+            col.addView(line2, lp2)
+            val rows = ArrayList<Pair<String, () -> Unit>>()
+            rows.add(Pair<String, () -> Unit>("Insertar imagen de fondo", { onPickBackground?.invoke() }))
+            if (m.backgroundImagePath != null) {
+                rows.add(Pair<String, () -> Unit>("Quitar imagen de fondo", { onRemoveBackground?.invoke() }))
+            }
+            for ((label, run) in rows) {
+                val r = LinearLayout(a)
+                r.gravity = Gravity.CENTER_VERTICAL
+                r.setPadding(dp(12), 0, dp(10), 0)
+                r.addView(UiKit.text(a, label, 16, ink), LinearLayout.LayoutParams(0, -2, 1f))
+                UiKit.ripple(a, r, 10, 0)
+                r.setOnClickListener {
+                    pw?.dismiss()
+                    run()
+                }
+                col.addView(r, LinearLayout.LayoutParams(dp(250), dp(44)))
+            }
+        }
         val p = PopupWindow(col, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, true)
         p.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         p.elevation = dp(8).toFloat()

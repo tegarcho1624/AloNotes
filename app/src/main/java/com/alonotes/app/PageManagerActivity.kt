@@ -341,6 +341,16 @@ class PageManagerActivity : Activity() {
         val pen = Paint(Paint.ANTI_ALIAS_FLAG)
         paint.color = spec.bg
         c.drawRect(0f, 0f, w.toFloat(), h.toFloat(), paint)
+        // Imagen de fondo de la hoja (centerCrop, igual que la hoja)
+        val bgf = pl.backgroundFile
+        val bgBm = if (bgf != null) ImageUtil.decodeFile(bgf.path, 640) else null
+        if (bgBm != null) {
+            val bk = max(w.toFloat() / bgBm.width, h.toFloat() / bgBm.height)
+            val bm2 = android.graphics.Matrix()
+            bm2.setScale(bk, bk)
+            bm2.postTranslate((w - bgBm.width * bk) / 2f, (h - bgBm.height * bk) / 2f)
+            c.drawBitmap(bgBm, bm2, paint)
+        }
         for (ly in pl.layers) {
             if (!ly.isVisible) continue
             val sc = LayerBlend.begin(c, ly, w.toFloat(), h.toFloat()) // opacidad y modo de fusión, como en la hoja
@@ -499,6 +509,7 @@ class PageManagerActivity : Activity() {
         try {
             val keep = HashSet<String>()
             for (p in pages) for (ly in p.layers.layers) for (im in ly.items) keep.add(im.file.name)
+            for (p in pages) p.layers.backgroundImagePath?.let { keep.add(it) } // las imágenes de fondo también se conservan
             File(filesDir, "images/$docId").listFiles()?.forEach { if (!keep.contains(it.name)) it.delete() }
         } catch (ignored: Exception) {
             // Los archivos sueltos se borran con la nota.

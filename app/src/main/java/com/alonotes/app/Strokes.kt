@@ -255,6 +255,23 @@ internal class PageLayers(first: List<Stroke>? = null) {
     val layers = ArrayList<Layer>()
     private var seq = 1
 
+    /**
+     * Imagen de fondo de la hoja: nombre del archivo en images/<idNota>/ (null = sin imagen). Se dibuja debajo de todas las capas, escalada
+     * para cubrir la hoja sin deformarse (centerCrop). Se guarda en el JSON de capas. No forma parte del historial de deshacer.
+     */
+    var backgroundImagePath: String? = null
+
+    /** Carpeta donde está ese archivo (no se guarda: se asigna al cargar la nota y al elegir la imagen). */
+    var bgDir: File? = null
+
+    /** El archivo de la imagen de fondo, o null si no hay. */
+    val backgroundFile: File?
+        get() {
+            val n = backgroundImagePath ?: return null
+            val d = bgDir ?: return null
+            return File(d, n)
+        }
+
     var selected = 0
         set(v) {
             field = v.coerceIn(0, layers.size - 1)
@@ -820,12 +837,31 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
         invalidate()
     }
 
+    private val bgMatrix = Matrix()
+    private val bgPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+
     override fun onDraw(c: Canvas) {
         val scale = width / spec.wMm
         bg.color = spec.bg
         rect.set(0f, 0f, width.toFloat(), height.toFloat())
         c.drawRect(rect, bg)
         val pl = page()
+        // Imagen de fondo de la hoja: debajo de todas las capas y trazos, escalada con una Matrix para cubrir toda la hoja sin deformarse
+        // (centerCrop: se estira hasta cubrir y se recorta lo que sobra). Se carga aparte; mientras no esté lista se ve solo el color.
+        val bgf = pl?.backgroundFile
+        if (bgf != null) {
+            val bgBm = PageBackground.get(bgf, if (max(width, height) > 900) 2048 else 1024) { postInvalidate() }
+            if (bgBm != null) {
+                val k = max(width.toFloat() / bgBm.width, height.toFloat() / bgBm.height)
+                bgMatrix.reset()
+                bgMatrix.setScale(k, k)
+                bgMatrix.postTranslate((width - bgBm.width * k) / 2f, (height - bgBm.height * k) / 2f)
+                val n = c.save()
+                c.clipRect(rect)
+                c.drawBitmap(bgBm, bgMatrix, bgPaint)
+                c.restoreToCount(n)
+            }
+        }
         val ls = liftedSet
         val gm = liftMatrix
         var pm: Matrix? = null

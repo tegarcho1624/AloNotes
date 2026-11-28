@@ -60,8 +60,8 @@ internal class ClipLayer(
     val locked: Boolean = false
 )
 
-/** Una hoja copiada: sus datos de página (JSON), sus capas con trazos e imágenes, y la capa seleccionada. */
-internal class ClipPage(val json: String, val layers: List<ClipLayer>, val selected: Int)
+/** Una hoja copiada: sus datos de página (JSON), sus capas con trazos e imágenes, la capa seleccionada y su imagen de fondo (copia propia). */
+internal class ClipPage(val json: String, val layers: List<ClipLayer>, val selected: Int, val bg: File? = null)
 
 /**
  * Portapapeles de hojas (en memoria mientras la app esté abierta). Guarda COPIAS PROFUNDAS: los trazos se
@@ -114,7 +114,18 @@ internal object PageClipboard {
                 }
                 layers.add(ClipLayer(ly.name, ly.isVisible, ly.opacity, strokes, imgs, texts, ly.blendMode, ly.isLocked))
             }
-            out.add(ClipPage(js.toString(), layers, pl.selected))
+            var bgCopy: File? = null
+            val bgSrc = pl.backgroundFile
+            if (bgSrc != null && bgSrc.exists()) {
+                val dst = File(d, (n++).toString() + "_bg_" + bgSrc.name)
+                try {
+                    bgSrc.copyTo(dst, true)
+                    bgCopy = dst
+                } catch (e: Exception) {
+                    // Sin fondo en la copia
+                }
+            }
+            out.add(ClipPage(js.toString(), layers, pl.selected, bgCopy))
         }
         pages = out
     }
@@ -163,6 +174,20 @@ internal object PageClipboard {
             if (ls.isEmpty()) ls.add(Layer(1L, "Capa 1"))
             val pl = PageLayers()
             pl.replaceWith(ls, cp.selected)
+            val bgc = cp.bg
+            if (bgc != null && bgc.exists()) {
+                // La hoja pegada tiene su propio archivo de fondo (nombre nuevo): nada se comparte entre hojas
+                val ext = bgc.extension
+                val id = UUID.randomUUID().toString()
+                val dst = File(imgDir, if (ext.isEmpty()) id else "$id.$ext")
+                try {
+                    bgc.copyTo(dst, true)
+                    pl.backgroundImagePath = dst.name
+                    pl.bgDir = imgDir
+                } catch (e: Exception) {
+                    // Sin fondo en la hoja pegada
+                }
+            }
             out.add(Pair(js, pl))
         }
         return out
