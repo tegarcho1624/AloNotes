@@ -450,6 +450,11 @@ el ícono del launcher (color fijo).
 - **Arreglo (`LayersPanel.showMenu`):** se mide el contenido, la ventana se coloca arriba o abajo del botón según donde haya más espacio y, si aun así no cabe, tiene el alto disponible y el contenido se desplaza (`ScrollView`).
   El modo de fusión y el bloqueo no cambiaron.
 
+## Fondo de hoja estirado (v0.32.2)
+- La imagen de fondo ya no usa centerCrop: se estira (fitXY) para cubrir EXACTAMENTE el rectángulo de la hoja, sin conservar la proporción (se deforma si no coincide). `PageView.onDraw` hace
+  `canvas.drawBitmap(bitmap, null, rect, paint)` con `rect` = los límites de la hoja (se quitó la `Matrix`). Las miniaturas del gestor de hojas usan el mismo estirado. Nada más cambió (capas, trazos, guardado).
+  (Esto reemplaza lo dicho de centerCrop en la sección v0.32.0.)
+
 ## Compilar
 Sube el proyecto a GitHub: el workflow `.github/workflows/build.yml` (Build APK, JDK 17, Gradle 8.9)
 genera el APK en la pestaña Actions → artefacto `AloNotes-debug`.

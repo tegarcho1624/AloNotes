@@ -837,7 +837,6 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
         invalidate()
     }
 
-    private val bgMatrix = Matrix()
     private val bgPaint = Paint(Paint.FILTER_BITMAP_FLAG)
 
     override fun onDraw(c: Canvas) {
@@ -846,21 +845,13 @@ internal class PageView(ctx: Context, val spec: PageViewport.Spec, private val p
         rect.set(0f, 0f, width.toFloat(), height.toFloat())
         c.drawRect(rect, bg)
         val pl = page()
-        // Imagen de fondo de la hoja: debajo de todas las capas y trazos, escalada con una Matrix para cubrir toda la hoja sin deformarse
-        // (centerCrop: se estira hasta cubrir y se recorta lo que sobra). Se carga aparte; mientras no esté lista se ve solo el color.
+        // Imagen de fondo de la hoja: debajo de todas las capas y trazos, estirada para cubrir EXACTAMENTE el ancho y el alto de la hoja
+        // (fitXY: sin conservar la proporción, así que se deforma si la imagen no tiene la misma proporción que la hoja). El rectángulo de
+        // destino es el de los límites de la hoja. Se carga aparte; mientras no esté lista se ve solo el color.
         val bgf = pl?.backgroundFile
         if (bgf != null) {
             val bgBm = PageBackground.get(bgf, if (max(width, height) > 900) 2048 else 1024) { postInvalidate() }
-            if (bgBm != null) {
-                val k = max(width.toFloat() / bgBm.width, height.toFloat() / bgBm.height)
-                bgMatrix.reset()
-                bgMatrix.setScale(k, k)
-                bgMatrix.postTranslate((width - bgBm.width * k) / 2f, (height - bgBm.height * k) / 2f)
-                val n = c.save()
-                c.clipRect(rect)
-                c.drawBitmap(bgBm, bgMatrix, bgPaint)
-                c.restoreToCount(n)
-            }
+            if (bgBm != null) c.drawBitmap(bgBm, null, rect, bgPaint)
         }
         val ls = liftedSet
         val gm = liftMatrix
